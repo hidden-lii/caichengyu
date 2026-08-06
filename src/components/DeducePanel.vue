@@ -80,6 +80,7 @@ const qwenConfigRef = ref<InstanceType<typeof QwenConfig> | null>(null);
 const lexiconBusy = ref(false);
 const lexiconBusyText = ref('');
 const showDetailPanel = ref(false);
+const markPreviewRef = ref<HTMLElement | null>(null);
 const persistDialog = ref<{
   mode: 'add' | 'update';
   word: string;
@@ -474,11 +475,32 @@ async function onCandidateCopy(word: string) {
   }
 }
 
-function onCandidateSelect(word: string) {
+async function onCandidateSelect(word: string) {
   loadWord(word);
   if (deduceDraft.value?.word === word) {
     setMsg(`已选中「${word}」`, 'ok');
   }
+  await nextTick();
+  // 草稿卡片可能刚挂载，再等一帧确保布局完成
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+  scrollToMarkPreview();
+}
+
+function scrollToMarkPreview() {
+  const target = markPreviewRef.value;
+  if (!target) return;
+  const scroller = document.getElementById('app');
+  if (scroller) {
+    const offset = 12;
+    const top =
+      scroller.scrollTop +
+      target.getBoundingClientRect().top -
+      scroller.getBoundingClientRect().top -
+      offset;
+    scroller.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+    return;
+  }
+  target.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function markClass(state: string | null, isAuto = false) {
@@ -719,7 +741,7 @@ defineExpose({ loadWord });
       </div>
     </div>
 
-    <div v-if="deduceDraft" class="deduce-guess-card">
+    <div v-if="deduceDraft" ref="markPreviewRef" class="deduce-guess-card">
       <div class="deduce-card-head">
         <div>
           <div class="deduce-word-title">{{ deduceDraft.word }}</div>

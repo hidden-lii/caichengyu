@@ -63,6 +63,27 @@ body {
   margin-bottom: 0.75rem;
 }
 
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.brand-logo {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  object-fit: contain;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+.brand-text {
+  min-width: 0;
+}
+
 h1 {
   font-size: clamp(1.75rem, 5vw, 2.25rem);
   font-weight: 600;
@@ -525,10 +546,11 @@ button:disabled {
 }
 
 .deduce-py-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.55rem 0.85rem;
-  align-items: flex-end;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.55rem 0.5rem;
+  align-items: end;
+  width: 100%;
 }
 
 .preview-row {
@@ -540,7 +562,8 @@ button:disabled {
   flex-direction: column;
   align-items: center;
   gap: 0.3rem;
-  min-width: 3.2rem;
+  min-width: 0;
+  width: 100%;
 }
 
 .deduce-node {
@@ -608,8 +631,12 @@ button.deduce-node {
 }
 
 .deduce-syl-input {
-  width: 4.2rem;
-  padding: 0.12rem 0.25rem;
+  /* 最长约 zhuang4 / chuang1（7 字符），略留余量避免裁切 */
+  width: 8.5ch;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.12rem 0.35rem;
   font-size: 0.72rem;
   font-family: ui-monospace, monospace;
   text-align: center;
@@ -620,7 +647,7 @@ button.deduce-node {
 }
 
 .deduce-syl-input.inline {
-  width: 4.5rem;
+  width: 8.5ch;
   display: inline-block;
   margin-left: 0.15rem;
   vertical-align: middle;
@@ -735,7 +762,18 @@ button.deduce-node {
 .deduce-py-nodes {
   display: flex;
   align-items: center;
+  justify-content: center;
+  flex-wrap: nowrap;
   gap: 2px;
+  max-width: 100%;
+}
+
+.deduce-py-nodes .deduce-node {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .deduce-pinyin-bar {

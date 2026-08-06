@@ -6,6 +6,7 @@ import LexiconPanel from '../components/LexiconPanel.vue';
 import OcrHistoryPanel from '../components/OcrHistoryPanel.vue';
 import QueryPanel from '../components/QueryPanel.vue';
 import { useLexicon } from '../composables/useLexicon';
+import appLogo from '../assets/logo.png';
 
 type TabKey = 'blind' | 'deduce' | 'query' | 'ocr-history' | 'settings';
 
@@ -69,9 +70,12 @@ function statusText() {
 <template>
   <div class="wrap">
     <header class="app-header">
-      <div>
-        <h1>猜成语</h1>
-        <p class="subtitle">本地词库 · 标记筛选 · 拼音通配查询</p>
+      <div class="brand">
+        <img class="brand-logo" :src="appLogo" alt="猜成语" width="48" height="48" />
+        <div class="brand-text">
+          <h1>猜成语</h1>
+          <p class="subtitle">本地词库 · 标记筛选 · 拼音通配查询</p>
+        </div>
       </div>
       <button type="button" class="ghost settings-btn" @click="showSettings = !showSettings">
         {{ showSettings ? '返回' : '词库设置' }}
