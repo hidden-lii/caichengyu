@@ -1,0 +1,50 @@
+# 在 GitHub 云端打包 Windows 安装包（.exe / .msi）
+# 触发方式：
+# 1. Actions 页手动 Run workflow
+# 2. 推送形如 v0.1.0 的 tag
+name: Build Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-windows:
+    permissions:
+      contents: write
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri (Windows)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v__VERSION__
+          releaseName: '猜成语 v__VERSION__'
+          releaseBody: |
+            Windows 安装包见下方 Assets。
+            - `.exe`：NSIS 安装程序
+            - `.msi`：Windows Installer
+          releaseDraft: true
+          prerelease: false
