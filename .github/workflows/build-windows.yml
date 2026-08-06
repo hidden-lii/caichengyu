@@ -33,7 +33,7 @@ jobs:
           workspaces: './src-tauri -> target'
 
       - name: Install frontend dependencies
-        run: npm ci
+        run: npm ci --registry=https://registry.npmjs.org/
 
       - name: Build Tauri (Windows)
         uses: tauri-apps/tauri-action@v0
