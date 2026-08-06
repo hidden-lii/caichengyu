@@ -45,6 +45,6 @@ jobs:
           releaseBody: |
             Windows 安装包见下方 Assets。
             - `.exe`：NSIS 安装程序（安装后窗口标题仍为「猜成语」）
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           args: --bundles nsis
