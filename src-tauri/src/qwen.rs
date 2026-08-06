@@ -5,7 +5,55 @@ use serde_json::{json, Value};
 use std::io::{BufRead, BufReader};
 use std::time::Duration;
 
-const BASE_URL: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+/// 百炼按量付费（通用 API Key，`sk-` 开头）
+const BASE_URL_DASHSCOPE: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+/// Token Plan 专属（`sk-sp-` 开头）
+const BASE_URL_TOKEN_PLAN: &str =
+    "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1";
+/// Coding Plan 专属（`sk-sp-` 开头）
+const BASE_URL_CODING_PLAN: &str = "https://coding.dashscope.aliyuncs.com/v1";
+
+/// Key 类型：与 Base URL 配套，不可混用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyPlan {
+    DashScope,
+    TokenPlan,
+    CodingPlan,
+}
+
+impl KeyPlan {
+    pub fn parse(raw: &str) -> Self {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "token_plan" | "token-plan" | "tokenplan" => Self::TokenPlan,
+            "coding_plan" | "coding-plan" | "codingplan" => Self::CodingPlan,
+            _ => Self::DashScope,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DashScope => "dashscope",
+            Self::TokenPlan => "token_plan",
+            Self::CodingPlan => "coding_plan",
+        }
+    }
+
+    pub fn base_url(self) -> &'static str {
+        match self {
+            Self::DashScope => BASE_URL_DASHSCOPE,
+            Self::TokenPlan => BASE_URL_TOKEN_PLAN,
+            Self::CodingPlan => BASE_URL_CODING_PLAN,
+        }
+    }
+
+    pub fn fallback_models(self) -> &'static [&'static str] {
+        match self {
+            Self::DashScope => FALLBACK_MODELS_DASHSCOPE,
+            Self::TokenPlan => FALLBACK_MODELS_TOKEN_PLAN,
+            Self::CodingPlan => FALLBACK_MODELS_CODING_PLAN,
+        }
+    }
+}
 
 /// 无论用户如何改写自定义 prompt，后端都会强制追加这段输出约束。
 pub const PROMPT_SCHEMA_SUFFIX: &str = r#"
@@ -34,7 +82,7 @@ pub const PROMPT_SCHEMA_SUFFIX: &str = r#"
 5. 除上述 JSON 外不得输出任何其他字符
 "#;
 
-const FALLBACK_MODELS: &[&str] = &[
+const FALLBACK_MODELS_DASHSCOPE: &[&str] = &[
     "qwen3-vl-plus",
     "qwen3-vl-flash",
     "qwen-vl-max",
@@ -43,6 +91,25 @@ const FALLBACK_MODELS: &[&str] = &[
     "qwen2.5-vl-72b-instruct",
     "qwen2.5-vl-32b-instruct",
     "qwen2.5-vl-7b-instruct",
+];
+
+/// Token Plan 套餐内具备视觉理解能力的常用模型
+const FALLBACK_MODELS_TOKEN_PLAN: &[&str] = &[
+    "qwen3.7-plus",
+    "qwen3.6-plus",
+    "qwen3.6-flash",
+    "qwen3.8-max",
+    "kimi-k2.5",
+    "kimi-k2.6",
+    "kimi-k2.7-code",
+];
+
+/// Coding Plan 套餐内支持图片理解的模型
+const FALLBACK_MODELS_CODING_PLAN: &[&str] = &[
+    "qwen3.7-plus",
+    "qwen3.6-plus",
+    "qwen3.5-plus",
+    "kimi-k2.5",
 ];
 
 fn http_client() -> Result<Client, String> {
@@ -84,15 +151,17 @@ struct ApiError {
     code: Option<String>,
 }
 
-pub fn list_models(api_key: &str) -> Result<Vec<String>, String> {
+pub fn list_models(api_key: &str, key_plan: &str) -> Result<Vec<String>, String> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err("请先填写 API Key".to_string());
     }
 
+    let plan = KeyPlan::parse(key_plan);
+    let base = plan.base_url();
     let client = http_client()?;
     let resp = client
-        .get(format!("{}/models", BASE_URL))
+        .get(format!("{}/models", base))
         .bearer_auth(key)
         .send()
         .map_err(|e| format!("请求模型列表失败: {}", e))?;
@@ -103,7 +172,12 @@ pub fn list_models(api_key: &str) -> Result<Vec<String>, String> {
         .map_err(|e| format!("读取模型列表响应失败: {}", e))?;
 
     if !status.is_success() {
-        return Err(format!("模型列表请求失败 ({}): {}", status.as_u16(), truncate(&text, 300)));
+        return Err(format!(
+            "模型列表请求失败 ({}) [{}]: {}",
+            status.as_u16(),
+            plan.as_str(),
+            truncate(&text, 300)
+        ));
     }
 
     let parsed: ModelsResponse = serde_json::from_str(&text)
@@ -121,7 +195,11 @@ pub fn list_models(api_key: &str) -> Result<Vec<String>, String> {
     ids.dedup();
 
     if ids.is_empty() {
-        return Ok(FALLBACK_MODELS.iter().map(|s| (*s).to_string()).collect());
+        return Ok(plan
+            .fallback_models()
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect());
     }
     Ok(ids)
 }
@@ -147,16 +225,27 @@ pub fn recognize_guess_board(
     image_b64: &str,
     mime: &str,
     api_key: &str,
+    key_plan: &str,
     model: &str,
     user_prompt: &str,
 ) -> Result<BoardParseResult, String> {
-    recognize_guess_board_with_progress(image_b64, mime, api_key, model, user_prompt, false, None)
+    recognize_guess_board_with_progress(
+        image_b64,
+        mime,
+        api_key,
+        key_plan,
+        model,
+        user_prompt,
+        false,
+        None,
+    )
 }
 
 pub fn recognize_guess_board_with_progress(
     image_b64: &str,
     mime: &str,
     api_key: &str,
+    key_plan: &str,
     model: &str,
     user_prompt: &str,
     stream: bool,
@@ -176,6 +265,7 @@ pub fn recognize_guess_board_with_progress(
         return Err("图片数据为空".to_string());
     }
 
+    let plan = KeyPlan::parse(key_plan);
     let mime = normalize_mime(mime);
     let prompt = build_full_prompt(user_prompt);
     let data_url = format!("data:{};base64,{}", mime, b64);
@@ -200,7 +290,7 @@ pub fn recognize_guess_board_with_progress(
 
     let client = http_client()?;
     let resp = client
-        .post(format!("{}/chat/completions", BASE_URL))
+        .post(format!("{}/chat/completions", plan.base_url()))
         .bearer_auth(key)
         .header("Content-Type", "application/json")
         .json(&body)

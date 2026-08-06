@@ -664,6 +664,11 @@ button.deduce-node {
   color: var(--muted);
 }
 
+.qwen-config > select {
+  width: 100%;
+  max-width: 100%;
+}
+
 .qwen-model-manual {
   margin-top: 0.35rem;
 }

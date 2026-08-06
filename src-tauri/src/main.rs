@@ -150,8 +150,9 @@ fn set_setting(key: String, value: String) -> bool {
 }
 
 #[tauri::command]
-async fn list_qwen_models(api_key: String) -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || qwen::list_models(&api_key))
+async fn list_qwen_models(api_key: String, key_plan: Option<String>) -> Result<Vec<String>, String> {
+    let key_plan = key_plan.unwrap_or_else(|| "dashscope".to_string());
+    tauri::async_runtime::spawn_blocking(move || qwen::list_models(&api_key, &key_plan))
         .await
         .map_err(|e| format!("拉取模型任务失败: {}", e))?
 }
@@ -174,6 +175,7 @@ async fn parse_guess_board(
     image_b64: String,
     mime: Option<String>,
     api_key: String,
+    key_plan: Option<String>,
     model: String,
     prompt: Option<String>,
     stream: Option<bool>,
@@ -181,6 +183,7 @@ async fn parse_guess_board(
     let mime = mime.unwrap_or_else(|| "image/png".to_string());
     let prompt = prompt.unwrap_or_default();
     let stream = stream.unwrap_or(false);
+    let key_plan = key_plan.unwrap_or_else(|| "dashscope".to_string());
     tauri::async_runtime::spawn_blocking(move || {
         if stream {
             let mut on_chunk = |delta: &str, text: &str| {
@@ -196,13 +199,14 @@ async fn parse_guess_board(
                 &image_b64,
                 &mime,
                 &api_key,
+                &key_plan,
                 &model,
                 &prompt,
                 true,
                 Some(&mut on_chunk),
             )
         } else {
-            qwen::recognize_guess_board(&image_b64, &mime, &api_key, &model, &prompt)
+            qwen::recognize_guess_board(&image_b64, &mime, &api_key, &key_plan, &model, &prompt)
         }
     })
     .await

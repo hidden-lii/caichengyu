@@ -10,14 +10,18 @@ import {
 import {
   DEFAULT_QWEN_PROMPT,
   FALLBACK_QWEN_MODELS,
+  parseKeyPlan,
+  QWEN_KEY_PLAN_OPTIONS,
   QWEN_SETTING_KEYS,
+  type QwenKeyPlan,
 } from '../engine/qwen';
 
 const apiKey = ref('');
-const model = ref(FALLBACK_QWEN_MODELS[0]);
+const keyPlan = ref<QwenKeyPlan>('dashscope');
+const model = ref(FALLBACK_QWEN_MODELS.dashscope[0]);
 const prompt = ref(DEFAULT_QWEN_PROMPT);
 const schemaSuffix = ref('');
-const models = ref<string[]>([...FALLBACK_QWEN_MODELS]);
+const models = ref<string[]>([...FALLBACK_QWEN_MODELS.dashscope]);
 const showKey = ref(false);
 const loadingModels = ref(false);
 const saving = ref(false);
@@ -26,10 +30,22 @@ const msgClass = ref('');
 const detailsEl = ref<HTMLDetailsElement | null>(null);
 
 const emit = defineEmits<{
-  change: [config: { apiKey: string; model: string; prompt: string }];
+  change: [config: { apiKey: string; keyPlan: QwenKeyPlan; model: string; prompt: string }];
 }>();
 
 const ready = computed(() => !!apiKey.value.trim() && !!model.value.trim());
+
+const keyPlanHint = computed(
+  () => QWEN_KEY_PLAN_OPTIONS.find((o) => o.value === keyPlan.value)?.hint || '',
+);
+
+const apiKeyPlaceholder = computed(() =>
+  keyPlan.value === 'dashscope' ? 'sk-...' : 'sk-sp-...',
+);
+
+function fallbackModels(plan: QwenKeyPlan = keyPlan.value): string[] {
+  return [...FALLBACK_QWEN_MODELS[plan]];
+}
 
 function setMsg(text: string, cls = 'ok') {
   msg.value = text;
@@ -39,6 +55,7 @@ function setMsg(text: string, cls = 'ok') {
 function emitChange() {
   emit('change', {
     apiKey: apiKey.value.trim(),
+    keyPlan: keyPlan.value,
     model: model.value.trim(),
     prompt: prompt.value,
   });
@@ -59,10 +76,21 @@ async function persistModels(list: string[]) {
   await setSetting(QWEN_SETTING_KEYS.models, JSON.stringify(list));
 }
 
+function applyPlanDefaults(plan: QwenKeyPlan, preferModel?: string) {
+  const list = fallbackModels(plan);
+  models.value = list;
+  if (preferModel && list.includes(preferModel)) {
+    model.value = preferModel;
+  } else if (!list.includes(model.value)) {
+    model.value = list[0] || '';
+  }
+}
+
 async function load() {
-  const [savedKey, savedModel, savedPrompt, savedModels, visited, schema, defaultPrompt] =
+  const [savedKey, savedPlan, savedModel, savedPrompt, savedModels, visited, schema, defaultPrompt] =
     await Promise.all([
       getSetting(QWEN_SETTING_KEYS.apiKey),
+      getSetting(QWEN_SETTING_KEYS.keyPlan),
       getSetting(QWEN_SETTING_KEYS.model),
       getSetting(QWEN_SETTING_KEYS.prompt),
       getSetting(QWEN_SETTING_KEYS.models),
@@ -71,9 +99,13 @@ async function load() {
       getQwenDefaultPrompt().catch(() => DEFAULT_QWEN_PROMPT),
     ]);
 
+  keyPlan.value = parseKeyPlan(savedPlan);
+
   const cachedModels = parseSavedModels(savedModels);
   if (cachedModels.length) {
     models.value = cachedModels;
+  } else {
+    models.value = fallbackModels(keyPlan.value);
   }
 
   if (savedKey) apiKey.value = savedKey;
@@ -82,6 +114,8 @@ async function load() {
     if (!models.value.includes(savedModel)) {
       models.value = [savedModel, ...models.value];
     }
+  } else if (!models.value.includes(model.value)) {
+    model.value = models.value[0] || fallbackModels(keyPlan.value)[0];
   }
   prompt.value = savedPrompt || defaultPrompt || DEFAULT_QWEN_PROMPT;
   schemaSuffix.value = schema;
@@ -104,6 +138,7 @@ async function save() {
   try {
     await Promise.all([
       setSetting(QWEN_SETTING_KEYS.apiKey, apiKey.value.trim()),
+      setSetting(QWEN_SETTING_KEYS.keyPlan, keyPlan.value),
       setSetting(QWEN_SETTING_KEYS.model, model.value.trim()),
       setSetting(QWEN_SETTING_KEYS.prompt, prompt.value),
       persistModels(models.value),
@@ -125,20 +160,24 @@ async function refreshModels() {
   loadingModels.value = true;
   setMsg('');
   try {
-    const list = await listQwenModels(apiKey.value.trim());
-    models.value = list.length ? list : [...FALLBACK_QWEN_MODELS];
+    const list = await listQwenModels(apiKey.value.trim(), keyPlan.value);
+    models.value = list.length ? list : fallbackModels();
     if (!models.value.includes(model.value)) {
-      model.value = models.value[0] || FALLBACK_QWEN_MODELS[0];
+      model.value = models.value[0] || fallbackModels()[0];
     }
     await Promise.all([
       persistModels(models.value),
       setSetting(QWEN_SETTING_KEYS.model, model.value.trim()),
       setSetting(QWEN_SETTING_KEYS.apiKey, apiKey.value.trim()),
+      setSetting(QWEN_SETTING_KEYS.keyPlan, keyPlan.value),
     ]);
     setMsg(`已加载 ${models.value.length} 个可用模型`, 'ok');
     emitChange();
   } catch (e) {
-    models.value = [...FALLBACK_QWEN_MODELS];
+    models.value = fallbackModels();
+    if (!models.value.includes(model.value)) {
+      model.value = models.value[0] || '';
+    }
     setMsg('拉取模型失败，已使用内置候选：' + (e instanceof Error ? e.message : String(e)), 'warn');
   } finally {
     loadingModels.value = false;
@@ -151,7 +190,14 @@ function resetPrompt() {
   setMsg('已恢复默认可编辑 Prompt', 'ok');
 }
 
-watch([apiKey, model, prompt], () => emitChange());
+function onKeyPlanChange() {
+  applyPlanDefaults(keyPlan.value, model.value);
+  void setSetting(QWEN_SETTING_KEYS.keyPlan, keyPlan.value);
+  emitChange();
+  setMsg(`已切换为「${QWEN_KEY_PLAN_OPTIONS.find((o) => o.value === keyPlan.value)?.label}」，请刷新模型列表`, 'ok');
+}
+
+watch([apiKey, keyPlan, model, prompt], () => emitChange());
 
 /** 切换/填写模型时写入上次选择（防抖，避免手动输入每个字都落库） */
 let modelSaveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -170,6 +216,7 @@ onMounted(() => {
 defineExpose({
   getConfig: () => ({
     apiKey: apiKey.value.trim(),
+    keyPlan: keyPlan.value,
     model: model.value.trim(),
     prompt: prompt.value,
     ready: ready.value,
@@ -182,15 +229,24 @@ defineExpose({
   <details ref="detailsEl" class="qwen-config">
     <summary>千问识别设置</summary>
     <p class="hint">
-      使用阿里云百炼（DashScope）API Key。识别时会把下方「可编辑 Prompt」与固定 JSON 约束一并发送；JSON 格式约束不可关闭。
+      使用阿里云百炼 API。Key 类型须与套餐匹配：按量付费用通用 Key；Token Plan / Coding Plan 用
+      <code>sk-sp-</code> 专属 Key 与对应端点。识别时会把下方「可编辑 Prompt」与固定 JSON 约束一并发送。
     </p>
+
+    <label>Key 类型</label>
+    <select v-model="keyPlan" @change="onKeyPlanChange">
+      <option v-for="opt in QWEN_KEY_PLAN_OPTIONS" :key="opt.value" :value="opt.value">
+        {{ opt.label }}
+      </option>
+    </select>
+    <p class="hint">{{ keyPlanHint }}</p>
 
     <label>API Key</label>
     <div class="row">
       <input
         v-model="apiKey"
         :type="showKey ? 'text' : 'password'"
-        placeholder="sk-..."
+        :placeholder="apiKeyPlaceholder"
         spellcheck="false"
         autocomplete="off"
       />
@@ -209,12 +265,12 @@ defineExpose({
         {{ loadingModels ? '拉取中…' : '刷新模型列表' }}
       </button>
     </div>
-    <p class="hint">点「刷新」按你的 Key 拉取账号可用模型；也可在下方手动填写模型 ID。</p>
+    <p class="hint">点「刷新」按当前 Key 类型对应端点拉取可用模型；也可在下方手动填写模型 ID。</p>
     <input
       v-model="model"
       type="text"
       class="qwen-model-manual"
-      placeholder="或手动填写模型 ID，如 qwen3-vl-plus"
+      placeholder="或手动填写模型 ID，如 qwen3.7-plus"
       spellcheck="false"
     />
 

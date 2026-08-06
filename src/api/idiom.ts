@@ -42,8 +42,11 @@ export function setSetting(key: string, value: string): Promise<boolean> {
   return invoke<boolean>('set_setting', { key, value });
 }
 
-export function listQwenModels(apiKey: string): Promise<string[]> {
-  return invoke<string[]>('list_qwen_models', { apiKey });
+export function listQwenModels(apiKey: string, keyPlan?: string): Promise<string[]> {
+  return invoke<string[]>('list_qwen_models', {
+    apiKey,
+    keyPlan: keyPlan ?? null,
+  });
 }
 
 export function getQwenPromptSchema(): Promise<string> {
@@ -58,6 +61,8 @@ export function parseGuessBoard(params: {
   imageB64: string;
   mime?: string;
   apiKey: string;
+  /** dashscope | token_plan | coding_plan */
+  keyPlan?: string;
   model: string;
   prompt?: string;
   /** 为 true 时后端走 SSE，并通过 qwen-ocr-chunk 事件推送增量 */
@@ -67,6 +72,7 @@ export function parseGuessBoard(params: {
     imageB64: params.imageB64,
     mime: params.mime ?? null,
     apiKey: params.apiKey,
+    keyPlan: params.keyPlan ?? null,
     model: params.model,
     prompt: params.prompt ?? null,
     stream: params.stream ?? false,

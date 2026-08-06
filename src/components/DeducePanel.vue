@@ -26,7 +26,7 @@ import {
   toneDigit,
   DEDUCE_ATTRS,
 } from '../engine/pinyin';
-import { QWEN_SETTING_KEYS } from '../engine/qwen';
+import { QWEN_SETTING_KEYS, type QwenKeyPlan } from '../engine/qwen';
 import ImageIntake from './ImageIntake.vue';
 import IdiomResultList from './IdiomResultList.vue';
 import OcrReview from './OcrReview.vue';
@@ -56,7 +56,12 @@ const ocrLastRaw = ref('');
 const ocrLastMeta = ref('');
 const ocrShowStream = ref(false);
 const ocrStreamText = ref('');
-const qwenConfig = ref({ apiKey: '', model: '', prompt: '' });
+const qwenConfig = ref({
+  apiKey: '',
+  keyPlan: 'dashscope' as QwenKeyPlan,
+  model: '',
+  prompt: '',
+});
 const qwenConfigRef = ref<InstanceType<typeof QwenConfig> | null>(null);
 
 let ocrChunkUnlisten: UnlistenFn | null = null;
@@ -393,6 +398,7 @@ async function onOcrImage(payload: { base64: string; mime: string; previewUrl: s
       imageB64: payload.base64,
       mime: payload.mime,
       apiKey: cfg.apiKey,
+      keyPlan: cfg.keyPlan || 'dashscope',
       model: cfg.model,
       prompt: cfg.prompt,
       stream: useStream,
@@ -430,7 +436,12 @@ async function onOcrImage(payload: { base64: string; mime: string; previewUrl: s
   }
 }
 
-function onQwenConfigChange(config: { apiKey: string; model: string; prompt: string }) {
+function onQwenConfigChange(config: {
+  apiKey: string;
+  keyPlan: QwenKeyPlan;
+  model: string;
+  prompt: string;
+}) {
   qwenConfig.value = config;
 }
 
