@@ -52,6 +52,43 @@ export function buildIndexFromDb(items: IdiomEntry[]): { result: IndexedIdiom[];
   return { result, skipped };
 }
 
+/** 分块建索引，中间让出主线程，避免转圈动画卡死 */
+export async function buildIndexFromDbChunked(
+  items: IdiomEntry[],
+  onProgress?: (done: number, total: number) => void | Promise<void>,
+  chunkSize = 800
+): Promise<{ result: IndexedIdiom[]; skipped: number }> {
+  const result: IndexedIdiom[] = [];
+  let skipped = 0;
+  const total = items.length;
+  for (let i = 0; i < total; i++) {
+    const item = items[i];
+    if (item.chars?.length) {
+      result.push({
+        id: item.id,
+        word: item.word,
+        pinyin: item.pinyin,
+        explanation: item.explanation || '',
+        chars: item.chars,
+        blind_eligible: item.blind_eligible,
+      });
+    } else {
+      const normalized = normalizeEntry(item);
+      if (!normalized) {
+        skipped++;
+      } else {
+        const built = buildIndex([normalized]);
+        if (built.result.length) result.push(...built.result);
+        else skipped++;
+      }
+    }
+    if ((i + 1) % chunkSize === 0 || i + 1 === total) {
+      await onProgress?.(i + 1, total);
+    }
+  }
+  return { result, skipped };
+}
+
 function allDistinct<T>(values: T[]): boolean {
   return new Set(values).size === values.length;
 }

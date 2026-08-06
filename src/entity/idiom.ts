@@ -33,6 +33,10 @@ export interface PositionMarks {
   sm: MarkState;
   ym: MarkState;
   tone: MarkState;
+  /** 声/韵/调是否由「字」的存在标记自动带出（人选可覆盖，冲突以人选为准） */
+  autoSm?: boolean;
+  autoYm?: boolean;
+  autoTone?: boolean;
 }
 
 export interface DeduceGuess {

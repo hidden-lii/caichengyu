@@ -16,7 +16,8 @@ const deducePanel = ref<InstanceType<typeof DeducePanel> | null>(null);
 const pendingQuery = ref('');
 const pendingDeduceWord = ref('');
 
-const { index, wordMap, skipped, loading, error, blindPool, total, blindCount, reload } = useLexicon();
+const { index, wordMap, skipped, loading, loadingText, ready, error, blindPool, total, blindCount, reload } =
+  useLexicon();
 
 const tabs = [
   { key: 'blind' as const, label: '随机成语' },
@@ -28,10 +29,6 @@ const tabs = [
 onMounted(async () => {
   await reload();
 });
-
-async function onRefreshed() {
-  await reload();
-}
 
 function switchTab(key: TabKey) {
   activeTab.value = key;
@@ -59,7 +56,7 @@ function onFillDeduce(word: string) {
 }
 
 function statusText() {
-  if (loading.value) return '词库加载中…';
+  if (loading.value) return loadingText.value || '词库加载中…';
   if (error.value) return `加载失败：${error.value}`;
   if (!total.value) return '词库为空，请在设置中导入';
   let text = `词库已就绪（${total.value} 条`;
@@ -82,7 +79,8 @@ function statusText() {
     </header>
 
     <div class="status" :class="{ ok: total && !error, warn: !total || error, loading: loading }">
-      {{ statusText() }}
+      <span v-if="loading" class="image-intake-spinner sm" aria-hidden="true"></span>
+      <span>{{ statusText() }}</span>
     </div>
 
     <nav v-if="!showSettings" class="tab-bar">
@@ -99,8 +97,8 @@ function statusText() {
     </nav>
 
     <main class="main-content">
-      <LexiconPanel v-if="showSettings" @refreshed="onRefreshed" />
-      <template v-else-if="!loading">
+      <LexiconPanel v-if="showSettings" />
+      <template v-else-if="ready">
         <BlindPanel
           v-show="activeTab === 'blind'"
           :index="index"
@@ -122,7 +120,10 @@ function statusText() {
         />
         <OcrHistoryPanel v-if="activeTab === 'ocr-history'" />
       </template>
-      <div v-else class="loading">正在加载词库并建立索引…</div>
+      <div v-else class="loading">
+        <span class="image-intake-spinner" aria-hidden="true"></span>
+        <span>{{ loadingText || '正在加载词库并建立索引…' }}</span>
+      </div>
     </main>
   </div>
 </template>

@@ -1,5 +1,11 @@
 import type { DeduceGuess, IndexedIdiom, MarkState, PositionMarks } from '../entity/idiom';
-import { charOwnsPronunciation, DEDUCE_ATTRS } from './pinyin';
+import {
+  charOwnsPronunciation,
+  DEDUCE_ATTRS,
+  isAutoPronunciationAttr,
+  setAutoPronunciationAttr,
+  type PronunciationAttr,
+} from './pinyin';
 
 interface FixedPos {
   c?: string;
@@ -92,28 +98,33 @@ export function mergeDeduceConstraints(guesses: DeduceGuess[]): MergedConstraint
     for (let i = 0; i < g.chars.length; i++) {
       if (charFixed[i] !== undefined) continue;
       const marks = g.marks[i];
-      if (charOwnsPronunciation(marks)) continue;
       for (const attr of DEDUCE_ATTRS) {
         if (attr.key === 'char') continue;
-        const state = marks[attr.key] || 'absent';
+        const key = attr.key as PronunciationAttr;
+        // 字带出的自动声韵调只参与 owned，不生成固定/偏移/排除；人选标记优先
+        if (isAutoPronunciationAttr(marks, key)) continue;
+        if (charOwnsPronunciation(marks) && marks[key] == null) continue;
+        const state = marks[key] || 'absent';
         const rawVal =
-          attr.key === 'sm' ? g.chars[i].sm : attr.key === 'ym' ? g.chars[i].ym : g.chars[i].tone;
-        if ((state === 'present' || state === 'absent') && isOwned(attr.key, rawVal)) {
-          // 同值已被字命中/偏移“拥有”时不能进全局 absent，但仍需禁止出现在本位置
+          key === 'sm' ? g.chars[i].sm : key === 'ym' ? g.chars[i].ym : g.chars[i].tone;
+        if ((state === 'present' || state === 'absent') && isOwned(key, rawVal)) {
+          // 同值已被字命中/偏移“拥有”时不能进全局 absent；人选 present 仍生效
           if (state === 'absent') {
-            excludeAt.push({ kind: attr.key, value: rawVal, at: i });
+            excludeAt.push({ kind: key, value: rawVal, at: i });
+          } else if (state === 'present') {
+            present.push({ kind: key, value: rawVal, notAt: i });
           }
           continue;
         }
         if (state === 'hit') {
           if (!fixed[i]) fixed[i] = {};
-          (fixed[i] as Record<string, unknown>)[attr.key] = rawVal;
+          (fixed[i] as Record<string, unknown>)[key] = rawVal;
         } else if (state === 'absent') {
-          excludeAt.push({ kind: attr.key, value: rawVal, at: i });
-          if (attr.key === 'tone') absent.tone.add(rawVal);
-          else absent[attr.key].add(String(rawVal));
+          excludeAt.push({ kind: key, value: rawVal, at: i });
+          if (key === 'tone') absent.tone.add(rawVal);
+          else absent[key].add(String(rawVal));
         } else if (state === 'present') {
-          present.push({ kind: attr.key, value: rawVal, notAt: i });
+          present.push({ kind: key, value: rawVal, notAt: i });
         }
       }
     }
@@ -136,7 +147,16 @@ export function mergeDeduceConstraints(guesses: DeduceGuess[]): MergedConstraint
     }
   }
 
-  return { fixed, present, excludeAt, absent, len, owned };
+  // 存在(对/偏)优先于不存在：同位置同值若已 hit，去掉与之冲突的 excludeAt
+  const resolvedExclude = excludeAt.filter((e) => {
+    const f = fixed[e.at];
+    if (!f) return true;
+    const fv = (f as Record<string, unknown>)[e.kind];
+    if (fv === undefined) return true;
+    return !(fv === e.value || String(fv) === String(e.value));
+  });
+
+  return { fixed, present, excludeAt: resolvedExclude, absent, len, owned };
 }
 
 export function deduceFilter(index: IndexedIdiom[], guesses: DeduceGuess[]): IndexedIdiom[] {
@@ -223,6 +243,9 @@ export function createEmptyMarks(len: number): PositionMarks[] {
     sm: null,
     ym: null,
     tone: null,
+    autoSm: false,
+    autoYm: false,
+    autoTone: false,
   }));
 }
 
@@ -237,13 +260,29 @@ export function guessHasMark(guess: DeduceGuess | null): boolean {
   return !!(guess && guess.marks.some((m) => m.char || m.sm || m.ym || m.tone));
 }
 
-export function finalizeMarks(marks: PositionMarks[]): Required<Record<keyof PositionMarks, MarkState>>[] {
-  return marks.map((m) => ({
-    char: m.char || 'absent',
-    sm: m.sm || 'absent',
-    ym: m.ym || 'absent',
-    tone: m.tone || 'absent',
-  }));
+export function finalizeMarks(marks: PositionMarks[]): PositionMarks[] {
+  return marks.map((m) => {
+    const out: PositionMarks = {
+      char: m.char || 'absent',
+      sm: m.sm || 'absent',
+      ym: m.ym || 'absent',
+      tone: m.tone || 'absent',
+      autoSm: false,
+      autoYm: false,
+      autoTone: false,
+    };
+    if (out.char === 'hit' || out.char === 'present') {
+      for (const attr of ['sm', 'ym', 'tone'] as const) {
+        const wasAuto = isAutoPronunciationAttr(m, attr);
+        const wasUnset = m[attr] == null;
+        if (wasAuto || wasUnset) {
+          out[attr] = out.char;
+          setAutoPronunciationAttr(out, attr, true);
+        }
+      }
+    }
+    return out;
+  });
 }
 
 export function getActiveDeduceGuesses(

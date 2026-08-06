@@ -14,20 +14,32 @@ use entity::board::BoardParseResult;
 use entity::idiom::{Idiom, IdiomInput, LexiconMeta, UpsertResult};
 use std::path::PathBuf;
 
+fn upsert_err(msg: String) -> UpsertResult {
+    UpsertResult {
+        added: 0,
+        updated: 0,
+        skipped: 0,
+        errors: vec![msg],
+    }
+}
+
+/// 在阻塞线程池执行，避免同步命令卡住 UI 主线程。
 #[tauri::command]
-fn load_all_idioms() -> Vec<Idiom> {
-    match sqlite::load_all_idioms() {
+async fn load_all_idioms() -> Vec<Idiom> {
+    tauri::async_runtime::spawn_blocking(|| match sqlite::load_all_idioms() {
         Ok(items) => items,
         Err(e) => {
             eprintln!("load_all_idioms error: {:?}", e);
             vec![]
         }
-    }
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[tauri::command]
-fn get_lexicon_meta() -> LexiconMeta {
-    match sqlite::get_lexicon_meta() {
+async fn get_lexicon_meta() -> LexiconMeta {
+    tauri::async_runtime::spawn_blocking(|| match sqlite::get_lexicon_meta() {
         Ok(meta) => meta,
         Err(e) => {
             eprintln!("get_lexicon_meta error: {:?}", e);
@@ -36,84 +48,80 @@ fn get_lexicon_meta() -> LexiconMeta {
                 blind_count: 0,
             }
         }
-    }
+    })
+    .await
+    .unwrap_or(LexiconMeta {
+        total: 0,
+        blind_count: 0,
+    })
 }
 
 #[tauri::command]
-fn add_idiom(item: IdiomInput) -> UpsertResult {
-    match sqlite::upsert_idioms(vec![item]) {
+async fn add_idiom(item: IdiomInput) -> UpsertResult {
+    tauri::async_runtime::spawn_blocking(move || match sqlite::upsert_idioms(vec![item]) {
         Ok(result) => result,
         Err(e) => {
             eprintln!("add_idiom error: {:?}", e);
-            UpsertResult {
-                added: 0,
-                updated: 0,
-                skipped: 1,
-                errors: vec![format!("{:?}", e)],
-            }
+            upsert_err(format!("{:?}", e))
         }
-    }
+    })
+    .await
+    .unwrap_or_else(|e| upsert_err(format!("任务失败: {}", e)))
 }
 
 #[tauri::command]
-fn upsert_idioms(items: Vec<IdiomInput>) -> UpsertResult {
-    match sqlite::upsert_idioms(items) {
+async fn upsert_idioms(items: Vec<IdiomInput>) -> UpsertResult {
+    tauri::async_runtime::spawn_blocking(move || match sqlite::upsert_idioms(items) {
         Ok(result) => result,
         Err(e) => {
             eprintln!("upsert_idioms error: {:?}", e);
-            UpsertResult {
-                added: 0,
-                updated: 0,
-                skipped: 0,
-                errors: vec![format!("{:?}", e)],
-            }
+            upsert_err(format!("{:?}", e))
         }
-    }
+    })
+    .await
+    .unwrap_or_else(|e| upsert_err(format!("任务失败: {}", e)))
 }
 
 #[tauri::command]
-fn replace_lexicon(items: Vec<IdiomInput>) -> UpsertResult {
-    match sqlite::replace_lexicon(items) {
+async fn replace_lexicon(items: Vec<IdiomInput>) -> UpsertResult {
+    tauri::async_runtime::spawn_blocking(move || match sqlite::replace_lexicon(items) {
         Ok(result) => result,
         Err(e) => {
             eprintln!("replace_lexicon error: {:?}", e);
-            UpsertResult {
-                added: 0,
-                updated: 0,
-                skipped: 0,
-                errors: vec![format!("{:?}", e)],
-            }
+            upsert_err(format!("{:?}", e))
         }
-    }
+    })
+    .await
+    .unwrap_or_else(|e| upsert_err(format!("任务失败: {}", e)))
 }
 
 #[tauri::command]
-fn import_lexicon_from_url(url: String) -> UpsertResult {
-    match sqlite::import_lexicon_from_url(url) {
+async fn import_lexicon_from_url(url: String) -> UpsertResult {
+    tauri::async_runtime::spawn_blocking(move || match sqlite::import_lexicon_from_url(url) {
         Ok(result) => result,
-        Err(e) => UpsertResult {
-            added: 0,
-            updated: 0,
-            skipped: 0,
-            errors: vec![e],
-        },
-    }
+        Err(e) => upsert_err(e),
+    })
+    .await
+    .unwrap_or_else(|e| upsert_err(format!("任务失败: {}", e)))
 }
 
 #[tauri::command]
-fn delete_idiom(word: String) -> bool {
-    match sqlite::delete_idiom(word) {
+async fn delete_idiom(word: String) -> bool {
+    tauri::async_runtime::spawn_blocking(move || match sqlite::delete_idiom(word) {
         Ok(ok) => ok,
         Err(e) => {
             eprintln!("delete_idiom error: {:?}", e);
             false
         }
-    }
+    })
+    .await
+    .unwrap_or(false)
 }
 
 #[tauri::command]
-fn update_idiom_pinyin(word: String, pinyin: String) -> UpsertResult {
-    match sqlite::update_idiom_pinyin(word, pinyin) {
+async fn update_idiom_pinyin(word: String, pinyin: String) -> UpsertResult {
+    tauri::async_runtime::spawn_blocking(move || match sqlite::update_idiom_pinyin(word, pinyin)
+    {
         Ok(result) => result,
         Err(e) => {
             eprintln!("update_idiom_pinyin error: {:?}", e);
@@ -124,29 +132,35 @@ fn update_idiom_pinyin(word: String, pinyin: String) -> UpsertResult {
                 errors: vec![format!("{:?}", e)],
             }
         }
-    }
+    })
+    .await
+    .unwrap_or_else(|e| upsert_err(format!("任务失败: {}", e)))
 }
 
 #[tauri::command]
-fn get_setting(key: String) -> Option<String> {
-    match sqlite::get_setting(key) {
+async fn get_setting(key: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || match sqlite::get_setting(key) {
         Ok(value) => value,
         Err(e) => {
             eprintln!("get_setting error: {:?}", e);
             None
         }
-    }
+    })
+    .await
+    .unwrap_or(None)
 }
 
 #[tauri::command]
-fn set_setting(key: String, value: String) -> bool {
-    match sqlite::set_setting(key, value) {
+async fn set_setting(key: String, value: String) -> bool {
+    tauri::async_runtime::spawn_blocking(move || match sqlite::set_setting(key, value) {
         Ok(_) => true,
         Err(e) => {
             eprintln!("set_setting error: {:?}", e);
             false
         }
-    }
+    })
+    .await
+    .unwrap_or(false)
 }
 
 #[tauri::command]

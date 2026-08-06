@@ -4,7 +4,7 @@ import { writeText } from '@tauri-apps/api/clipboard';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { getSetting, parseGuessBoard, setSetting } from '../api/idiom';
 import type { BoardParseResult, OcrReviewRow } from '../entity/board';
-import type { DeduceGuess, IndexedIdiom } from '../entity/idiom';
+import type { DeduceGuess, IndexedIdiom, MarkState } from '../entity/idiom';
 import { applyDeduceDebugPaste, buildDeduceDebugDump } from '../engine/debug';
 import {
   createEmptyMarks,
@@ -12,20 +12,24 @@ import {
   finalizeMarks,
   getActiveDeduceGuesses,
   guessHasMark,
-  nextMark,
 } from '../engine/deduce';
 import { boardResultToReviewRows, reviewRowsToDeduceGuesses } from '../engine/ocr';
 import { appendOcrHistory, createHistoryEntry } from '../engine/ocrHistory';
 import {
-  charOwnsPronunciation,
   charsFromWordPinyin,
   charsToDigitPinyin,
   formatPinyinAsDigit,
+  isAutoPronunciationAttr,
   normalizePinyinInput,
+  parseSyllable,
+  setAutoPronunciationAttr,
   syncPronunciationMarksForChar,
   toneDigit,
   DEDUCE_ATTRS,
+  type PronunciationAttr,
 } from '../engine/pinyin';
+import { addIdiom, updateIdiomPinyin } from '../api/idiom';
+import { useLexicon } from '../composables/useLexicon';
 import { QWEN_SETTING_KEYS, type QwenKeyPlan } from '../engine/qwen';
 import ImageIntake from './ImageIntake.vue';
 import IdiomResultList from './IdiomResultList.vue';
@@ -36,6 +40,16 @@ const props = defineProps<{
   index: IndexedIdiom[];
   wordMap: Map<string, IndexedIdiom>;
 }>();
+
+const { reload: reloadLexicon } = useLexicon();
+
+function yieldToUi(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+}
 
 const wordInput = ref('');
 const pinyinInput = ref('');
@@ -63,6 +77,16 @@ const qwenConfig = ref({
   prompt: '',
 });
 const qwenConfigRef = ref<InstanceType<typeof QwenConfig> | null>(null);
+const lexiconBusy = ref(false);
+const lexiconBusyText = ref('');
+const showDetailPanel = ref(false);
+const persistDialog = ref<{
+  mode: 'add' | 'update';
+  word: string;
+  pinyin: string;
+  digit: string;
+  oldDigit?: string;
+} | null>(null);
 
 let ocrChunkUnlisten: UnlistenFn | null = null;
 
@@ -154,6 +178,72 @@ function loadWord(wordOverride?: string) {
   setMsg(`词库中未找到「${word}」，请填写拼音`, 'warn');
 }
 
+function askPersistPinyin(word: string, pinyin: string) {
+  const digit = formatPinyinAsDigit(pinyin) || pinyin;
+  const found = props.wordMap.get(word);
+  if (!found) {
+    persistDialog.value = { mode: 'add', word, pinyin, digit };
+    setMsg(`读音已改成 ${digit}，请确认是否写入词库`, 'warn');
+    return;
+  }
+  const oldDigit = formatPinyinAsDigit(found.pinyin);
+  if (oldDigit === digit) {
+    setMsg(`读音 ${digit} 与词库一致，无需更新`, 'ok');
+    return;
+  }
+  persistDialog.value = { mode: 'update', word, pinyin, digit, oldDigit };
+  setMsg(`读音已从 ${oldDigit} 改为 ${digit}，请确认是否更新词库`, 'warn');
+}
+
+function cancelPersistPinyin() {
+  persistDialog.value = null;
+  setMsg('已仅更新当前展示，未改词库', 'warn');
+}
+
+async function confirmPersistPinyin() {
+  const dialog = persistDialog.value;
+  if (!dialog) return;
+  persistDialog.value = null;
+
+  lexiconBusy.value = true;
+  lexiconBusyText.value = dialog.mode === 'add' ? '正在写入词库…' : '正在更新词库读音…';
+  await yieldToUi();
+  try {
+    if (dialog.mode === 'add') {
+      const result = await addIdiom({ word: dialog.word, pinyin: dialog.pinyin, explanation: '' });
+      if (result.added || result.updated) {
+        lexiconBusyText.value = '正在重新加载词库…';
+        await yieldToUi();
+        await reloadLexicon('正在重新加载词库…');
+        setMsg(`已新增「${dialog.word}」到词库（${dialog.digit}）`, 'ok');
+      } else {
+        setMsg(result.errors[0] || '写入词库失败', 'err');
+      }
+      return;
+    }
+
+    const result = await updateIdiomPinyin(dialog.word, dialog.pinyin);
+    if (result.updated) {
+      lexiconBusyText.value = '正在重新加载词库…';
+      await yieldToUi();
+      await reloadLexicon('正在重新加载词库…');
+      setMsg(`已更新词库「${dialog.word}」读音为 ${dialog.digit}`, 'ok');
+    } else {
+      setMsg(result.errors[0] || '更新词库失败', 'warn');
+    }
+  } catch (e) {
+    setMsg(
+      (dialog.mode === 'add' ? '写入' : '更新') +
+        '词库失败：' +
+        (e instanceof Error ? e.message : String(e)),
+      'err'
+    );
+  } finally {
+    lexiconBusy.value = false;
+    lexiconBusyText.value = '';
+  }
+}
+
 function applyPinyin() {
   const word = deduceDraft.value?.word || wordInput.value.trim().replace(/\s/g, '');
   const pinyin = pinyinInput.value.trim();
@@ -168,9 +258,10 @@ function applyPinyin() {
   }
   const marks = deduceDraft.value ? deduceDraft.value.marks : createEmptyMarks(chars.length);
   const editIndex = deduceDraft.value?.editIndex;
+  const normalized = normalizePinyinInput(pinyin);
   deduceDraft.value = {
     word,
-    pinyin: normalizePinyinInput(pinyin),
+    pinyin: normalized,
     chars,
     marks,
     ...(editIndex !== undefined ? { editIndex } : {}),
@@ -179,20 +270,74 @@ function applyPinyin() {
     Number.isInteger(editIndex) ? '读音已应用，可继续改标记后点「更新本条并筛选」' : '读音已应用，请标记后点「确认本条并筛选」',
     'ok'
   );
+  askPersistPinyin(word, normalized);
 }
 
-function toggleNodeMark(pos: number, attr: keyof DeduceGuess['marks'][0]) {
+function onSyllableEdit(pos: number, raw: string) {
+  if (!deduceDraft.value?.chars[pos]) return;
+  const trimmed = raw.trim();
+  if (!trimmed) return;
+  const parsed = parseSyllable(trimmed);
+  if (!parsed.py) {
+    setMsg('无法解析读音，请使用如 jian4 / xián 格式', 'err');
+    return;
+  }
+  const ch = deduceDraft.value.chars[pos];
+  ch.py = parsed.py;
+  ch.sm = parsed.sm;
+  ch.ym = parsed.ym;
+  ch.tone = parsed.tone;
+  const digit = charsToDigitPinyin(deduceDraft.value.chars);
+  pinyinInput.value = digit;
+  deduceDraft.value.pinyin = normalizePinyinInput(digit);
+  setMsg(`第 ${pos + 1} 字读音已改为 ${parsed.py}${toneDigit(parsed.tone)}`, 'ok');
+  askPersistPinyin(deduceDraft.value.word, deduceDraft.value.pinyin);
+}
+
+function clearTextSelection() {
+  const sel = window.getSelection?.();
+  if (sel && sel.rangeCount) sel.removeAllRanges();
+}
+
+function toggleNodeMark(pos: number, attr: 'char' | PronunciationAttr) {
+  // 左键：对 ↔ 无
+  clearTextSelection();
   if (!deduceDraft.value) return;
   const marksAt = deduceDraft.value.marks[pos];
-  if (attr !== 'char' && charOwnsPronunciation(marksAt)) return;
-  marksAt[attr] = nextMark(marksAt[attr]);
+  if (attr !== 'char' && isAutoPronunciationAttr(marksAt, attr)) {
+    setAutoPronunciationAttr(marksAt, attr, false);
+  }
+  const cur = marksAt[attr] as MarkState;
+  marksAt[attr] = cur === 'hit' ? 'absent' : 'hit';
   if (attr === 'char') syncPronunciationMarksForChar(marksAt);
 }
 
-function setMark(pos: number, attr: keyof DeduceGuess['marks'][0], mark: 'hit' | 'present' | 'absent') {
+function presentNodeMark(pos: number, attr: 'char' | PronunciationAttr, event: MouseEvent) {
+  // 右键：偏（已是偏则取消为无）
+  event.preventDefault();
+  event.stopPropagation();
+  clearTextSelection();
   if (!deduceDraft.value) return;
   const marksAt = deduceDraft.value.marks[pos];
-  if (attr !== 'char' && charOwnsPronunciation(marksAt)) return;
+  if (attr !== 'char' && isAutoPronunciationAttr(marksAt, attr)) {
+    setAutoPronunciationAttr(marksAt, attr, false);
+  }
+  marksAt[attr] = marksAt[attr] === 'present' ? 'absent' : 'present';
+  if (attr === 'char') syncPronunciationMarksForChar(marksAt);
+}
+
+function onNodePointerDown(event: MouseEvent) {
+  // 右键按下时禁止浏览器选中文字
+  if (event.button === 2) {
+    event.preventDefault();
+    clearTextSelection();
+  }
+}
+
+function setMark(pos: number, attr: 'char' | PronunciationAttr, mark: 'hit' | 'present' | 'absent') {
+  if (!deduceDraft.value) return;
+  const marksAt = deduceDraft.value.marks[pos];
+  if (attr !== 'char') setAutoPronunciationAttr(marksAt, attr, false);
   marksAt[attr] = marksAt[attr] === mark ? null : mark;
   if (attr === 'char') syncPronunciationMarksForChar(marksAt);
 }
@@ -201,7 +346,10 @@ function setTone(pos: number, toneVal: string) {
   if (!deduceDraft.value?.chars[pos]) return;
   const t = parseInt(toneVal, 10);
   deduceDraft.value.chars[pos].tone = t;
-  pinyinInput.value = charsToDigitPinyin(deduceDraft.value.chars);
+  const digit = charsToDigitPinyin(deduceDraft.value.chars);
+  pinyinInput.value = digit;
+  deduceDraft.value.pinyin = normalizePinyinInput(digit);
+  askPersistPinyin(deduceDraft.value.word, deduceDraft.value.pinyin);
 }
 
 function commitGuess(): boolean {
@@ -333,8 +481,16 @@ function onCandidateSelect(word: string) {
   }
 }
 
-function markClass(state: string | null) {
-  return state ? ` mark-${state}` : '';
+function markClass(state: string | null, isAuto = false) {
+  if (!state) return '';
+  return isAuto ? ` mark-${state} mark-auto` : ` mark-${state}`;
+}
+
+function attrMarkClass(marks: DeduceGuess['marks'][0] | undefined, attr: 'char' | PronunciationAttr) {
+  if (!marks) return '';
+  const state = marks[attr] || null;
+  if (attr === 'char') return markClass(state);
+  return markClass(state, isAutoPronunciationAttr(marks, attr));
 }
 
 async function persistOcrResult(params: {
@@ -477,9 +633,47 @@ defineExpose({ loadWord });
 </script>
 
 <template>
-  <section class="panel">
+  <section class="panel" @contextmenu.prevent>
+    <div v-if="persistDialog" class="lexicon-busy-overlay persist-dialog-overlay" role="dialog" aria-modal="true">
+      <div class="persist-dialog-card">
+        <h3>{{ persistDialog.mode === 'add' ? '写入词库？' : '更新词库读音？' }}</h3>
+        <p v-if="persistDialog.mode === 'add'">
+          词库中没有「{{ persistDialog.word }}」。是否按读音
+          <code>{{ persistDialog.digit }}</code>
+          新增？
+        </p>
+        <p v-else>
+          是否将「{{ persistDialog.word }}」的读音从
+          <code>{{ persistDialog.oldDigit }}</code>
+          更新为
+          <code>{{ persistDialog.digit }}</code>
+          ？
+        </p>
+        <div class="persist-dialog-actions">
+          <button type="button" @click="confirmPersistPinyin">
+            {{ persistDialog.mode === 'add' ? '写入词库' : '更新词库' }}
+          </button>
+          <button type="button" class="ghost" @click="cancelPersistPinyin">只改展示，不写库</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="lexiconBusy" class="lexicon-busy-overlay" role="status" aria-live="polite">
+      <div class="lexicon-busy-card">
+        <span class="image-intake-spinner" aria-hidden="true"></span>
+        <div class="lexicon-busy-card-text">
+          <strong>{{ lexiconBusyText || '词库处理中…' }}</strong>
+          <span>界面可继续显示，请稍候</span>
+        </div>
+      </div>
+    </div>
+
     <p class="hint panel-intro">
-      输入已猜过的成语，为每字的字/声母/韵母/声调标记：绿=对 · 紫=偏 · 灰=无。未标记在筛选时视为「无」。
+      输入已猜过的成语并标记。未标记在筛选时视为「无」。字标为存在时会自动带出声韵调（浅色）。
+      读音在字下方输入框修改（如 <span class="example">jian4</span>），改完后可确认是否写入词库。
+    </p>
+    <p class="hint deduce-click-hint">
+      <strong>标记操作：</strong>左键在「对 / 无」之间切换；右键标「偏」（再右键取消为「无」）。绿=对 · 紫=偏 · 灰=无。
     </p>
 
     <QwenConfig ref="qwenConfigRef" @change="onQwenConfigChange" />
@@ -531,43 +725,66 @@ defineExpose({ loadWord });
           <div class="deduce-word-title">{{ deduceDraft.word }}</div>
           <div class="deduce-pinyin-line">{{ charsToDigitPinyin(deduceDraft.chars) || deduceDraft.pinyin }}</div>
         </div>
+        <label class="deduce-detail-toggle">
+          <input v-model="showDetailPanel" type="checkbox" />
+          显示详细面板
+        </label>
       </div>
+      <p class="hint deduce-click-hint compact">左键：对 ↔ 无 · 右键：偏</p>
       <div class="deduce-py-row preview-row">
         <div v-for="(ch, pos) in deduceDraft.chars" :key="pos" class="deduce-syl">
           <button
             type="button"
             class="deduce-node char-node"
-            :class="markClass(deduceDraft.marks[pos]?.char || null)"
+            :class="attrMarkClass(deduceDraft.marks[pos], 'char')"
+            title="左键：对/无 · 右键：偏"
+            @mousedown="onNodePointerDown"
             @click="toggleNodeMark(pos, 'char')"
+            @contextmenu="presentNodeMark(pos, 'char', $event)"
           >
             {{ ch.c }}
           </button>
+          <input
+            class="deduce-syl-input"
+            type="text"
+            spellcheck="false"
+            :value="ch.py + toneDigit(ch.tone)"
+            title="直接改读音，如 jian4"
+            @change="onSyllableEdit(pos, ($event.target as HTMLInputElement).value)"
+            @keydown.enter.prevent="onSyllableEdit(pos, ($event.target as HTMLInputElement).value)"
+          />
           <div class="deduce-py-nodes">
             <button
               v-if="ch.sm"
               type="button"
               class="deduce-node"
-              :class="[markClass(deduceDraft.marks[pos]?.sm || null), { 'py-locked': charOwnsPronunciation(deduceDraft.marks[pos]) }]"
-              :disabled="charOwnsPronunciation(deduceDraft.marks[pos])"
+              :class="attrMarkClass(deduceDraft.marks[pos], 'sm')"
+              title="左键：对/无 · 右键：偏"
+              @mousedown="onNodePointerDown"
               @click="toggleNodeMark(pos, 'sm')"
+              @contextmenu="presentNodeMark(pos, 'sm', $event)"
             >
               {{ ch.sm }}
             </button>
             <button
               type="button"
               class="deduce-node"
-              :class="[markClass(deduceDraft.marks[pos]?.ym || null), { 'py-locked': charOwnsPronunciation(deduceDraft.marks[pos]) }]"
-              :disabled="charOwnsPronunciation(deduceDraft.marks[pos])"
+              :class="attrMarkClass(deduceDraft.marks[pos], 'ym')"
+              title="左键：对/无 · 右键：偏"
+              @mousedown="onNodePointerDown"
               @click="toggleNodeMark(pos, 'ym')"
+              @contextmenu="presentNodeMark(pos, 'ym', $event)"
             >
               {{ ch.ym || ch.py }}
             </button>
             <button
               type="button"
               class="deduce-node"
-              :class="[markClass(deduceDraft.marks[pos]?.tone || null), { 'py-locked': charOwnsPronunciation(deduceDraft.marks[pos]) }]"
-              :disabled="charOwnsPronunciation(deduceDraft.marks[pos])"
+              :class="attrMarkClass(deduceDraft.marks[pos], 'tone')"
+              title="左键：对/无 · 右键：偏"
+              @mousedown="onNodePointerDown"
               @click="toggleNodeMark(pos, 'tone')"
+              @contextmenu="presentNodeMark(pos, 'tone', $event)"
             >
               {{ toneDigit(ch.tone) }}
             </button>
@@ -575,17 +792,20 @@ defineExpose({ loadWord });
         </div>
       </div>
 
-      <div class="deduce-pos-grid">
+      <div v-if="showDetailPanel" class="deduce-pos-grid">
         <div v-for="(ch, pos) in deduceDraft.chars" :key="'col-' + pos" class="deduce-pos-col">
           <div class="pos-label">第 {{ pos + 1 }} 字 · {{ ch.py }}{{ toneDigit(ch.tone) }}</div>
-          <div
-            v-for="attr in DEDUCE_ATTRS"
-            :key="attr.key"
-            class="deduce-attr"
-            :class="{ 'attr-locked': attr.key !== 'char' && charOwnsPronunciation(deduceDraft.marks[pos]) }"
-          >
-            <div class="attr-name">{{ attr.label }}</div>
-            <div class="attr-val" :class="markClass(deduceDraft.marks[pos]?.[attr.key] || null)">
+          <div v-for="attr in DEDUCE_ATTRS" :key="attr.key" class="deduce-attr">
+            <div class="attr-name">
+              {{ attr.label }}
+              <span
+                v-if="attr.key !== 'char' && isAutoPronunciationAttr(deduceDraft.marks[pos], attr.key)"
+                class="auto-tag"
+              >
+                自动
+              </span>
+            </div>
+            <div class="attr-val" :class="attrMarkClass(deduceDraft.marks[pos], attr.key)">
               {{ attr.get(ch) }}
             </div>
             <select
@@ -596,27 +816,42 @@ defineExpose({ loadWord });
             >
               <option v-for="t in [1, 2, 3, 4, 5]" :key="t" :value="t">{{ t === 5 ? '轻' : t }}</option>
             </select>
-            <div v-if="attr.key !== 'char' && charOwnsPronunciation(deduceDraft.marks[pos])" class="attr-lock-hint">
-              随字（该字声韵调不参与筛选）
+            <div
+              v-if="attr.key !== 'char' && isAutoPronunciationAttr(deduceDraft.marks[pos], attr.key)"
+              class="attr-lock-hint"
+            >
+              随字自动（浅色）；点下方按钮可改为人选
             </div>
-            <div v-else class="mark-btns">
+            <div class="mark-btns">
               <button
                 type="button"
-                :class="{ 'active-hit': deduceDraft.marks[pos]?.[attr.key] === 'hit' }"
+                :class="{
+                  'active-hit':
+                    deduceDraft.marks[pos]?.[attr.key] === 'hit' &&
+                    (attr.key === 'char' || !isAutoPronunciationAttr(deduceDraft.marks[pos], attr.key)),
+                }"
                 @click="setMark(pos, attr.key, 'hit')"
               >
                 对
               </button>
               <button
                 type="button"
-                :class="{ 'active-present': deduceDraft.marks[pos]?.[attr.key] === 'present' }"
+                :class="{
+                  'active-present':
+                    deduceDraft.marks[pos]?.[attr.key] === 'present' &&
+                    (attr.key === 'char' || !isAutoPronunciationAttr(deduceDraft.marks[pos], attr.key)),
+                }"
                 @click="setMark(pos, attr.key, 'present')"
               >
                 偏
               </button>
               <button
                 type="button"
-                :class="{ 'active-absent': deduceDraft.marks[pos]?.[attr.key] === 'absent' }"
+                :class="{
+                  'active-absent':
+                    deduceDraft.marks[pos]?.[attr.key] === 'absent' &&
+                    (attr.key === 'char' || !isAutoPronunciationAttr(deduceDraft.marks[pos], attr.key)),
+                }"
                 @click="setMark(pos, attr.key, 'absent')"
               >
                 无
@@ -658,11 +893,11 @@ defineExpose({ loadWord });
         </div>
         <div class="deduce-py-row">
           <div v-for="(ch, pos) in g.chars" :key="pos" class="deduce-syl">
-            <span class="deduce-node char-node" :class="markClass(g.marks[pos]?.char || null)">{{ ch.c }}</span>
+            <span class="deduce-node char-node" :class="attrMarkClass(g.marks[pos], 'char')">{{ ch.c }}</span>
             <div class="deduce-py-nodes">
-              <span v-if="ch.sm" class="deduce-node" :class="markClass(g.marks[pos]?.sm || null)">{{ ch.sm }}</span>
-              <span class="deduce-node" :class="markClass(g.marks[pos]?.ym || null)">{{ ch.ym || ch.py }}</span>
-              <span class="deduce-node" :class="markClass(g.marks[pos]?.tone || null)">{{ toneDigit(ch.tone) }}</span>
+              <span v-if="ch.sm" class="deduce-node" :class="attrMarkClass(g.marks[pos], 'sm')">{{ ch.sm }}</span>
+              <span class="deduce-node" :class="attrMarkClass(g.marks[pos], 'ym')">{{ ch.ym || ch.py }}</span>
+              <span class="deduce-node" :class="attrMarkClass(g.marks[pos], 'tone')">{{ toneDigit(ch.tone) }}</span>
             </div>
           </div>
         </div>

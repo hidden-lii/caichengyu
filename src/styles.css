@@ -82,6 +82,9 @@ h3 {
 }
 
 .status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   padding: 0.65rem 0.9rem;
   border-radius: 6px;
   background: var(--surface);
@@ -192,6 +195,17 @@ button {
   font: inherit;
   cursor: pointer;
   white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
+}
+
+button * {
+  user-select: none;
+  -webkit-user-select: none;
+  pointer-events: none;
 }
 
 button.secondary {
@@ -349,8 +363,12 @@ button:disabled {
 }
 
 .loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
   text-align: center;
-  padding: 2rem;
+  padding: 2rem 1rem;
   color: var(--muted);
 }
 
@@ -539,6 +557,9 @@ button:disabled {
   color: var(--ink);
   border: none;
   cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 button.deduce-node {
@@ -565,6 +586,145 @@ button.deduce-node {
 .deduce-node.mark-absent {
   background: #787c7e;
   color: #fff;
+}
+
+/* 自动带出的存在标记：同色更浅，人选优先时可覆盖 */
+.deduce-node.mark-hit.mark-auto,
+.attr-val.mark-hit.mark-auto {
+  background: #b7d7b4;
+  color: #1f3d1c;
+}
+
+.deduce-node.mark-present.mark-auto,
+.attr-val.mark-present.mark-auto {
+  background: #c5b3e0;
+  color: #2d1b4e;
+}
+
+.deduce-node.mark-absent.mark-auto,
+.attr-val.mark-absent.mark-auto {
+  background: #c4c6c8;
+  color: #3a3a3a;
+}
+
+.deduce-syl-input {
+  width: 4.2rem;
+  padding: 0.12rem 0.25rem;
+  font-size: 0.72rem;
+  font-family: ui-monospace, monospace;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--ink);
+}
+
+.deduce-syl-input.inline {
+  width: 4.5rem;
+  display: inline-block;
+  margin-left: 0.15rem;
+  vertical-align: middle;
+}
+
+.auto-tag {
+  margin-left: 0.25rem;
+  font-size: 0.65rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.lexicon-busy-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0.5rem 0 0.75rem;
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  background: #fff;
+  border: 1px solid var(--border);
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.lexicon-busy-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(40, 36, 30, 0.28);
+  backdrop-filter: blur(1px);
+}
+
+.lexicon-busy-card {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  min-width: 240px;
+  max-width: min(90vw, 360px);
+  padding: 1rem 1.15rem;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid var(--border);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.12);
+}
+
+.lexicon-busy-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.lexicon-busy-card-text strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.persist-dialog-overlay {
+  z-index: 1100;
+}
+
+.persist-dialog-card {
+  min-width: 280px;
+  max-width: min(92vw, 420px);
+  padding: 1.1rem 1.2rem;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid var(--border);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.16);
+}
+
+.persist-dialog-card h3 {
+  margin: 0 0 0.55rem;
+  font-size: 1.05rem;
+}
+
+.persist-dialog-card p {
+  margin: 0 0 0.9rem;
+  line-height: 1.5;
+  color: var(--ink);
+  font-size: 0.92rem;
+}
+
+.persist-dialog-card code {
+  font-family: ui-monospace, monospace;
+  background: #f3efe8;
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+}
+
+.persist-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.lexicon-panel-busy {
+  opacity: 0.72;
+  pointer-events: none;
 }
 
 .deduce-node.py-locked {
@@ -606,6 +766,29 @@ button.deduce-node {
   justify-content: space-between;
   gap: 0.5rem;
   flex-wrap: wrap;
+}
+
+.deduce-detail-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.deduce-detail-toggle input {
+  margin: 0;
+}
+
+.deduce-click-hint {
+  margin: 0.35rem 0 0.65rem;
+}
+
+.deduce-click-hint.compact {
+  margin: 0.35rem 0 0.15rem;
+  font-size: 0.82rem;
 }
 
 .deduce-card-actions {

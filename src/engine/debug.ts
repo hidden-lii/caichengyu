@@ -1,8 +1,8 @@
 import type { DeduceGuess, IndexedIdiom, PositionMarks } from '../entity/idiom';
 import {
-  charOwnsPronunciation,
   charsToDigitPinyin,
   formatPinyinAsDigit,
+  isAutoPronunciationAttr,
   normalizePinyinInput,
   parseSyllable,
   syncPronunciationMarksForChar,
@@ -34,7 +34,10 @@ function serializeGuessForDebug(guess: DeduceGuess, idx: number) {
   const digitPy = charsToDigitPinyin(guess.chars) || formatPinyinAsDigit(guess.pinyin) || guess.pinyin;
   const positions = guess.chars.map((ch, pos) => {
     const marks = guess.marks[pos] || {};
-    const pyFollowsChar = charOwnsPronunciation(marks);
+    const pyFollowsChar =
+      isAutoPronunciationAttr(marks, 'sm') ||
+      isAutoPronunciationAttr(marks, 'ym') ||
+      isAutoPronunciationAttr(marks, 'tone');
     return {
       pos: pos + 1,
       char: ch.c,
@@ -43,6 +46,11 @@ function serializeGuessForDebug(guess: DeduceGuess, idx: number) {
       ym: ch.ym || '',
       tone: ch.tone,
       pyFollowsChar,
+      auto: {
+        sm: !!marks.autoSm,
+        ym: !!marks.autoYm,
+        tone: !!marks.autoTone,
+      },
       marks: {
         char: marks.char || 'absent',
         sm: marks.sm || 'absent',
@@ -174,13 +182,19 @@ function deserializeGuessFromDebug(data: Record<string, unknown>): DeduceGuess |
 
   const marks: PositionMarks[] = positions.map((p) => {
     const m = (p.marks || {}) as Record<string, unknown>;
-    const out = {
+    const auto = (p.auto || {}) as Record<string, unknown>;
+    const out: PositionMarks = {
       char: normalizeDebugMark(m.char),
       sm: normalizeDebugMark(m.sm),
       ym: normalizeDebugMark(m.ym),
       tone: normalizeDebugMark(m.tone),
+      autoSm: !!auto.sm,
+      autoYm: !!auto.ym,
+      autoTone: !!auto.tone,
     };
-    if (p.pyFollowsChar || charOwnsPronunciation(out)) syncPronunciationMarksForChar(out);
+    if (p.pyFollowsChar || out.char === 'hit' || out.char === 'present') {
+      syncPronunciationMarksForChar(out);
+    }
     return out;
   });
 

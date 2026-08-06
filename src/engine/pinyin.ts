@@ -165,19 +165,63 @@ export const DEDUCE_ATTRS = [
   { key: 'tone' as const, label: '声调', get: (ch: CharData) => toneLabel(ch.tone) },
 ];
 
+export type PronunciationAttr = 'sm' | 'ym' | 'tone';
+
 export function charOwnsPronunciation(marks: { char?: MarkState | string | null }): boolean {
   return marks.char === 'hit' || marks.char === 'present';
 }
 
+export function isAutoPronunciationAttr(
+  marks: {
+    autoSm?: boolean;
+    autoYm?: boolean;
+    autoTone?: boolean;
+  },
+  attr: PronunciationAttr
+): boolean {
+  if (attr === 'sm') return !!marks.autoSm;
+  if (attr === 'ym') return !!marks.autoYm;
+  return !!marks.autoTone;
+}
+
+export function setAutoPronunciationAttr(
+  marks: {
+    autoSm?: boolean;
+    autoYm?: boolean;
+    autoTone?: boolean;
+  },
+  attr: PronunciationAttr,
+  auto: boolean
+): void {
+  if (attr === 'sm') marks.autoSm = auto;
+  else if (attr === 'ym') marks.autoYm = auto;
+  else marks.autoTone = auto;
+}
+
+/** 字标为存在(对/偏)时，自动带出声韵调（浅色）；已人选的不覆盖 */
 export function syncPronunciationMarksForChar(marksAt: {
   char: MarkState | string | null;
   sm: MarkState | string | null;
   ym: MarkState | string | null;
   tone: MarkState | string | null;
+  autoSm?: boolean;
+  autoYm?: boolean;
+  autoTone?: boolean;
 }): void {
+  const attrs: PronunciationAttr[] = ['sm', 'ym', 'tone'];
   if (marksAt.char === 'hit' || marksAt.char === 'present') {
-    marksAt.sm = null;
-    marksAt.ym = null;
-    marksAt.tone = null;
+    for (const attr of attrs) {
+      const manual = marksAt[attr] != null && !isAutoPronunciationAttr(marksAt, attr);
+      if (manual) continue;
+      marksAt[attr] = marksAt.char;
+      setAutoPronunciationAttr(marksAt, attr, true);
+    }
+    return;
+  }
+  for (const attr of attrs) {
+    if (isAutoPronunciationAttr(marksAt, attr)) {
+      marksAt[attr] = null;
+      setAutoPronunciationAttr(marksAt, attr, false);
+    }
   }
 }

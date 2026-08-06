@@ -26,3 +26,17 @@ OpenAI 兼容端点（须与 Key 类型配套）：
 | 按量付费 | `sk-...` | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
 | Token Plan | `sk-sp-...` | `https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1` |
 | Coding Plan | `sk-sp-...` | `https://coding.dashscope.aliyuncs.com/v1` |
+
+## 变更记录
+
+### v0.3.0
+
+- **猜测交互**：左键切换「对/无」，右键切换「偏/无」；字命中后自动带出浅色声韵调，人选标记优先
+- **读音编辑**：支持按音节改读音；改完可确认写入/更新词库，或仅改当前展示
+- **词库体验**：加载/导入分块建索引并显示进度，避免界面卡死；刷新词库不卸载面板
+- **性能**：SQLite 相关 Tauri 命令改为 `spawn_blocking` 异步执行，避免阻塞 UI 主线程
+- **细节**：按钮右键不再误选文字；词库忙碌遮罩与写入确认对话框
+
+### v0.2.0
+
+- 支持按量付费 / Token Plan / Coding Plan 三类 Key，并路由到对应 OpenAI 兼容端点
