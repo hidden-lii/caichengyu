@@ -7,7 +7,7 @@
     "withGlobalTauri": false
   },
   "package": {
-    "productName": "猜成语",
+    "productName": "CaiChengYu",
     "version": "0.1.0"
   },
   "tauri": {
@@ -36,7 +36,7 @@
     },
     "bundle": {
       "active": true,
-      "targets": "all",
+      "targets": ["nsis"],
       "identifier": "aki.caichengyu",
       "resources": ["resources/idiom.json"],
       "icon": [
