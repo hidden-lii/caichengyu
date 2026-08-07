@@ -81,6 +81,44 @@ export function normalizeCorpus(data: unknown): IdiomInput[] {
   return out;
 }
 
+function charLen(word: string): number {
+  return [...word].length;
+}
+
+/**
+ * 解析词库文本：JSON 数组保持原样；JSONL（按行对象）默认只保留四字成语。
+ */
+export function parseLexiconText(
+  text: string,
+  options?: { fourCharOnlyForJsonl?: boolean },
+): IdiomInput[] {
+  const trimmed = text.trim();
+  if (!trimmed) throw new Error('词库内容为空');
+
+  if (trimmed.startsWith('[')) {
+    return normalizeCorpus(JSON.parse(trimmed));
+  }
+
+  const fourOnly = options?.fourCharOnlyForJsonl !== false;
+  const out: IdiomInput[] = [];
+  const lines = trimmed.split(/\r?\n/);
+  for (const line of lines) {
+    const lineTrim = line.trim();
+    if (!lineTrim) continue;
+    let obj: unknown;
+    try {
+      obj = JSON.parse(lineTrim);
+    } catch {
+      throw new Error('JSONL 行解析失败');
+    }
+    const e = normalizeEntry(obj as Partial<IdiomInput>);
+    if (!e) continue;
+    if (fourOnly && charLen(e.word) !== 4) continue;
+    out.push(e);
+  }
+  return out;
+}
+
 function stripTone(syl: string): { base: string; tone: number } {
   let s = syl.toLowerCase().replace(/ü/g, 'v');
   let tone = 0;

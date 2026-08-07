@@ -41,7 +41,18 @@ export const QWEN_SETTING_KEYS = {
   configVisited: 'qwen_config_visited',
   /** '1' 表示识别时实时展示流式返回 */
   streamPreview: 'qwen_stream_preview',
+  /** qwen | local */
+  ocrProvider: 'ocr_provider',
+  /** 本地 OCR 放大倍数（如 5 = 500%） */
+  localOcrScale: 'local_ocr_scale',
 } as const;
+
+export type OcrProvider = 'qwen' | 'local';
+
+export const OCR_PROVIDER_OPTIONS: { value: OcrProvider; label: string }[] = [
+  { value: 'qwen', label: '千问（云端）' },
+  { value: 'local', label: '本地 OCR' },
+];
 
 export const FALLBACK_QWEN_MODELS: Record<QwenKeyPlan, string[]> = {
   dashscope: [

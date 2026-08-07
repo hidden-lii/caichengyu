@@ -754,6 +754,51 @@ button.deduce-node {
   pointer-events: none;
 }
 
+.lexicon-source-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.5rem 0 0.75rem;
+}
+
+.lexicon-source-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--border, #d0d5dd);
+  border-radius: 8px;
+  cursor: pointer;
+  background: var(--panel-bg, #fff);
+}
+
+.lexicon-source-option.active {
+  border-color: var(--accent, #2563eb);
+  background: color-mix(in srgb, var(--accent, #2563eb) 8%, transparent);
+}
+
+.lexicon-source-option input {
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+}
+
+.lexicon-source-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.lexicon-source-text strong {
+  font-weight: 600;
+}
+
+.lexicon-source-text span {
+  font-size: 0.85rem;
+  opacity: 0.78;
+  line-height: 1.35;
+}
+
 .deduce-node.py-locked {
   opacity: 0.85;
   cursor: not-allowed;
@@ -860,6 +905,64 @@ button.deduce-node {
 }
 
 /* OCR image intake & review */
+.ocr-provider-bar {
+  margin: 0.75rem 0 0.5rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.ocr-provider-label {
+  display: block;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 0.45rem;
+}
+
+.ocr-provider-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.ocr-provider-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  user-select: none;
+}
+
+.ocr-provider-option.active {
+  border-color: var(--accent, #2f6fed);
+  background: color-mix(in srgb, var(--accent, #2f6fed) 12%, #fff);
+}
+
+.ocr-provider-option input {
+  margin: 0;
+}
+
+.ocr-scale-row {
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.ocr-scale-row label {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.ocr-scale-row input[type='range'] {
+  width: 100%;
+  max-width: 320px;
+}
+
 .qwen-config {
   margin: 0.75rem 0 1rem;
   padding: 0.85rem 1rem;

@@ -1,6 +1,6 @@
 [package]
 name = "caichengyu-tauri"
-version = "0.3.1"
+version = "0.4.0"
 description = "猜成语桌面应用"
 authors = ["aki"]
 edition = "2021"
@@ -15,6 +15,12 @@ serde_json = "1.0"
 rusqlite = { version = "0.29.0", features = ["bundled"] }
 lazy_static = "1.4"
 reqwest = { version = "0.11", features = ["json", "blocking"] }
+paddle-ocr-rs = "0.6"
+# 锁定与 paddle-ocr-rs 0.6.1 兼容的 ort / ndarray，避免 rc 升级破坏 API
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["ndarray", "download-binaries", "copy-dylibs"] }
+ndarray = "=0.16.1"
+image = "0.25"
+base64 = "0.22"
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

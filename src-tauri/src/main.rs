@@ -6,12 +6,15 @@ mod entity {
     pub mod idiom;
 }
 
+#[path = "local_ocr_impl.rs"]
+mod local_ocr;
 mod pinyin;
+mod preprocess;
 mod qwen;
 mod sqlite;
 
 use entity::board::BoardParseResult;
-use entity::idiom::{Idiom, IdiomInput, LexiconMeta, UpsertResult};
+use entity::idiom::{BuiltinLexiconInfo, Idiom, IdiomInput, LexiconMeta, UpsertResult};
 use std::path::PathBuf;
 
 fn upsert_err(msg: String) -> UpsertResult {
@@ -98,8 +101,71 @@ async fn replace_lexicon(items: Vec<IdiomInput>) -> UpsertResult {
 #[tauri::command]
 async fn import_lexicon_from_url(url: String) -> UpsertResult {
     tauri::async_runtime::spawn_blocking(move || match sqlite::import_lexicon_from_url(url) {
-        Ok(result) => result,
+        Ok(result) => {
+            let _ = sqlite::set_setting("lexicon_source".to_string(), "custom".to_string());
+            result
+        }
         Err(e) => upsert_err(e),
+    })
+    .await
+    .unwrap_or_else(|e| upsert_err(format!("任务失败: {}", e)))
+}
+
+fn builtin_lexicons() -> Vec<BuiltinLexiconInfo> {
+    vec![
+        BuiltinLexiconInfo {
+            id: "xinhua".into(),
+            name: "新华成语".into(),
+            description: "内置新华成语词库（默认）".into(),
+        },
+        BuiltinLexiconInfo {
+            id: "hwxnet".into(),
+            name: "汉文学网成语".into(),
+            description: "汉文学网成语，仅含四字".into(),
+        },
+    ]
+}
+
+fn builtin_resource_relative(source_id: &str) -> Option<&'static str> {
+    match source_id {
+        "xinhua" => Some("resources/idiom.json"),
+        "hwxnet" => Some("resources/idioms_hwxnet.json"),
+        _ => None,
+    }
+}
+
+fn resolve_resource_path(app: &tauri::AppHandle, relative: &str) -> Option<PathBuf> {
+    if let Some(path) = app.path_resolver().resolve_resource(relative) {
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(relative);
+    if dev_path.exists() {
+        return Some(dev_path);
+    }
+    None
+}
+
+#[tauri::command]
+fn list_builtin_lexicons() -> Vec<BuiltinLexiconInfo> {
+    builtin_lexicons()
+}
+
+#[tauri::command]
+async fn apply_builtin_lexicon(app: tauri::AppHandle, source_id: String) -> UpsertResult {
+    let Some(relative) = builtin_resource_relative(&source_id) else {
+        return upsert_err(format!("未知词库来源: {}", source_id));
+    };
+    let Some(path) = resolve_resource_path(&app, relative) else {
+        return upsert_err(format!("找不到词库资源: {}", relative));
+    };
+    let four_char_only = source_id == "hwxnet";
+    tauri::async_runtime::spawn_blocking(move || {
+        match sqlite::apply_lexicon_from_file(&path, four_char_only, &source_id) {
+            Ok(result) => result,
+            Err(e) => upsert_err(e),
+        }
     })
     .await
     .unwrap_or_else(|e| upsert_err(format!("任务失败: {}", e)))
@@ -227,15 +293,35 @@ async fn parse_guess_board(
     .map_err(|e| format!("识别任务失败: {}", e))?
 }
 
+/// 本地 OCR（PP-OCRv5）：放大 + 三色通道二值化后识别。
+#[tauri::command]
+async fn parse_guess_board_local(
+    image_b64: String,
+    scale: Option<f32>,
+) -> Result<BoardParseResult, String> {
+    let scale = scale.unwrap_or(5.0);
+    tauri::async_runtime::spawn_blocking(move || local_ocr::recognize_guess_board(&image_b64, scale))
+        .await
+        .map_err(|e| format!("本地识别任务失败: {}", e))?
+}
+
 fn resolve_seed_path(app: &tauri::App) -> Option<PathBuf> {
+    resolve_resource_path(&app.handle(), "resources/idiom.json")
+}
+
+fn resolve_ocr_model_dir(app: &tauri::App) -> Option<PathBuf> {
     if let Some(path) = app
         .path_resolver()
-        .resolve_resource("resources/idiom.json")
+        .resolve_resource("resources/ocr")
     {
-        return Some(path);
+        if path.join("ch_PP-OCRv5_mobile_det.onnx").exists() {
+            return Some(path);
+        }
     }
-    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/idiom.json");
-    if dev_path.exists() {
+    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("resources")
+        .join("ocr");
+    if dev_path.join("ch_PP-OCRv5_mobile_det.onnx").exists() {
         return Some(dev_path);
     }
     None
@@ -254,10 +340,23 @@ fn main() {
 
             if let Some(seed_path) = resolve_seed_path(app) {
                 match sqlite::seed_if_empty(&seed_path) {
-                    Ok(seeded) if seeded => eprintln!("seeded lexicon from {:?}", seed_path),
+                    Ok(seeded) if seeded => {
+                        eprintln!("seeded lexicon from {:?}", seed_path);
+                        let _ = sqlite::set_setting(
+                            "lexicon_source".to_string(),
+                            "xinhua".to_string(),
+                        );
+                    }
                     Err(e) => eprintln!("seed error: {:?}", e),
                     _ => {}
                 }
+            }
+
+            if let Some(ocr_dir) = resolve_ocr_model_dir(app) {
+                eprintln!("OCR models dir: {:?}", ocr_dir);
+                local_ocr::set_model_dir(ocr_dir);
+            } else {
+                eprintln!("OCR models not found under resources/ocr");
             }
 
             Ok(())
@@ -269,6 +368,8 @@ fn main() {
             upsert_idioms,
             replace_lexicon,
             import_lexicon_from_url,
+            list_builtin_lexicons,
+            apply_builtin_lexicon,
             delete_idiom,
             update_idiom_pinyin,
             get_setting,
@@ -276,7 +377,8 @@ fn main() {
             list_qwen_models,
             get_qwen_prompt_schema,
             get_qwen_default_prompt,
-            parse_guess_board
+            parse_guess_board,
+            parse_guess_board_local
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

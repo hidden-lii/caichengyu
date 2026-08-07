@@ -18,6 +18,13 @@ where
     f(conn)
 }
 
+/// Non-panicking check, for call sites (e.g. OCR lexicon correction) that should
+/// gracefully degrade instead of crashing when the DB hasn't been set up yet (tests, or
+/// an app-startup failure).
+pub fn is_initialized() -> bool {
+    DB.lock().map(|g| g.is_some()).unwrap_or(false)
+}
+
 pub fn initialize_database(db_path: PathBuf) -> Result<()> {
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent).ok();
@@ -279,6 +286,44 @@ pub fn import_lexicon_from_url(url: String) -> std::result::Result<UpsertResult,
         })
         .collect();
     replace_lexicon(items).map_err(|e| e.to_string())
+}
+
+/// 从 JSON 数组文件加载词库；`four_char_only` 为 true 时丢弃非四字条目。
+pub fn load_lexicon_json_file(
+    path: &Path,
+    four_char_only: bool,
+) -> std::result::Result<Vec<IdiomInput>, String> {
+    let raw = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let data: Vec<serde_json::Value> = serde_json::from_str(&raw).map_err(|e| e.to_string())?;
+    let items: Vec<IdiomInput> = data
+        .into_iter()
+        .filter_map(|v| {
+            let word = v.get("word")?.as_str()?.to_string();
+            if four_char_only && word.chars().count() != 4 {
+                return None;
+            }
+            Some(IdiomInput {
+                word,
+                pinyin: v.get("pinyin")?.as_str()?.to_string(),
+                explanation: v
+                    .get("explanation")
+                    .and_then(|e| e.as_str())
+                    .map(|s| s.to_string()),
+            })
+        })
+        .collect();
+    Ok(items)
+}
+
+pub fn apply_lexicon_from_file(
+    path: &Path,
+    four_char_only: bool,
+    source_id: &str,
+) -> std::result::Result<UpsertResult, String> {
+    let items = load_lexicon_json_file(path, four_char_only)?;
+    let result = replace_lexicon(items).map_err(|e| e.to_string())?;
+    set_setting("lexicon_source".to_string(), source_id.to_string()).map_err(|e| e.to_string())?;
+    Ok(result)
 }
 
 pub fn get_setting(key: String) -> Result<Option<String>> {

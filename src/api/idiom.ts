@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/tauri';
-import type { IdiomEntry, IdiomInput, LexiconMeta, UpsertResult } from '../entity/idiom';
+import type { BuiltinLexiconInfo, IdiomEntry, IdiomInput, LexiconMeta, UpsertResult } from '../entity/idiom';
 import type { BoardParseResult } from '../entity/board';
 
 export function loadAllIdioms(): Promise<IdiomEntry[]> {
@@ -24,6 +24,14 @@ export function replaceLexicon(items: IdiomInput[]): Promise<UpsertResult> {
 
 export function importLexiconFromUrl(url: string): Promise<UpsertResult> {
   return invoke<UpsertResult>('import_lexicon_from_url', { url });
+}
+
+export function listBuiltinLexicons(): Promise<BuiltinLexiconInfo[]> {
+  return invoke<BuiltinLexiconInfo[]>('list_builtin_lexicons');
+}
+
+export function applyBuiltinLexicon(sourceId: string): Promise<UpsertResult> {
+  return invoke<UpsertResult>('apply_builtin_lexicon', { sourceId });
 }
 
 export function deleteIdiom(word: string): Promise<boolean> {
@@ -76,5 +84,17 @@ export function parseGuessBoard(params: {
     model: params.model,
     prompt: params.prompt ?? null,
     stream: params.stream ?? false,
+  });
+}
+
+/** 本地 PP-OCRv5：放大 + 三色通道二值化识别 */
+export function parseGuessBoardLocal(params: {
+  imageB64: string;
+  /** 放大倍数，默认 5（500%） */
+  scale?: number;
+}): Promise<BoardParseResult> {
+  return invoke<BoardParseResult>('parse_guess_board_local', {
+    imageB64: params.imageB64,
+    scale: params.scale ?? 5,
   });
 }

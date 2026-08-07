@@ -8,7 +8,7 @@
   },
   "package": {
     "productName": "CaiChengYu",
-    "version": "0.3.1"
+    "version": "0.4.0"
   },
   "tauri": {
     "allowlist": {
@@ -38,7 +38,7 @@
       "active": true,
       "targets": ["nsis"],
       "identifier": "aki.caichengyu",
-      "resources": ["resources/idiom.json"],
+      "resources": ["resources/idiom.json", "resources/idioms_hwxnet.json", "resources/ocr/*"],
       "icon": [
         "icons/32x32.png",
         "icons/128x128.png",

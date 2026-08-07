@@ -1,13 +1,14 @@
 {
   "name": "caichengyu-tauri",
   "private": true,
-  "version": "0.3.1",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build:hwxnet-lexicon": "node scripts/build-hwxnet-lexicon.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^1.4.0",

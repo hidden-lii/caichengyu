@@ -35,6 +35,35 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci --registry=https://registry.npmjs.org/
 
+      # ONNX 模型未入库（.gitignore），打包前从 ModelScope 拉取
+      - name: Download OCR models
+        shell: pwsh
+        run: |
+          $dir = "src-tauri/resources/ocr"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $files = @(
+            @{
+              Name = "ch_PP-OCRv5_mobile_det.onnx"
+              Url  = "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.0.0/onnx/PP-OCRv5/det/ch_PP-OCRv5_mobile_det.onnx"
+            },
+            @{
+              Name = "ch_ppocr_mobile_v2.0_cls_infer.onnx"
+              Url  = "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.7.0/onnx/PP-OCRv4/cls/ch_ppocr_mobile_v2.0_cls_infer.onnx"
+            },
+            @{
+              Name = "ch_PP-OCRv5_rec_mobile_infer.onnx"
+              Url  = "https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.0.0/onnx/PP-OCRv5/rec/ch_PP-OCRv5_rec_mobile_infer.onnx"
+            }
+          )
+          foreach ($f in $files) {
+            $out = Join-Path $dir $f.Name
+            Write-Host "Downloading $($f.Name) ..."
+            Invoke-WebRequest -Uri $f.Url -OutFile $out -UseBasicParsing
+            if (-not (Test-Path $out) -or (Get-Item $out).Length -lt 100000) {
+              throw "Failed to download $($f.Name)"
+            }
+          }
+
       - name: Build Tauri (Windows)
         uses: tauri-apps/tauri-action@v0
         env:
@@ -45,6 +74,10 @@ jobs:
           releaseBody: |
             Windows 安装包见下方 Assets。
             - `.exe`：NSIS 安装程序（安装后窗口标题仍为「猜成语」）
+
+            ### v0.4.0
+            - 本地 PP-OCRv5 识别（可与千问云端切换）
+            - 内置汉文学网四字成语词库，可在词库设置切换
           releaseDraft: false
           prerelease: false
           args: --bundles nsis

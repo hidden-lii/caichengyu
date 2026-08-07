@@ -2,7 +2,7 @@
 import { computed, nextTick, onUnmounted, ref } from 'vue';
 import { writeText } from '@tauri-apps/api/clipboard';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { getSetting, parseGuessBoard, setSetting } from '../api/idiom';
+import { getSetting, parseGuessBoard, parseGuessBoardLocal, setSetting } from '../api/idiom';
 import type { BoardParseResult, OcrReviewRow } from '../entity/board';
 import type { DeduceGuess, IndexedIdiom, MarkState } from '../entity/idiom';
 import { applyDeduceDebugPaste, buildDeduceDebugDump } from '../engine/debug';
@@ -30,7 +30,12 @@ import {
 } from '../engine/pinyin';
 import { addIdiom, updateIdiomPinyin } from '../api/idiom';
 import { useLexicon } from '../composables/useLexicon';
-import { QWEN_SETTING_KEYS, type QwenKeyPlan } from '../engine/qwen';
+import {
+  OCR_PROVIDER_OPTIONS,
+  QWEN_SETTING_KEYS,
+  type OcrProvider,
+  type QwenKeyPlan,
+} from '../engine/qwen';
 import ImageIntake from './ImageIntake.vue';
 import IdiomResultList from './IdiomResultList.vue';
 import OcrReview from './OcrReview.vue';
@@ -70,6 +75,8 @@ const ocrLastRaw = ref('');
 const ocrLastMeta = ref('');
 const ocrShowStream = ref(false);
 const ocrStreamText = ref('');
+const ocrProvider = ref<OcrProvider>('qwen');
+const localOcrScale = ref(5);
 const qwenConfig = ref({
   apiKey: '',
   keyPlan: 'dashscope' as QwenKeyPlan,
@@ -94,10 +101,28 @@ let ocrChunkUnlisten: UnlistenFn | null = null;
 void getSetting(QWEN_SETTING_KEYS.streamPreview).then((v) => {
   ocrShowStream.value = v === '1';
 });
+void getSetting(QWEN_SETTING_KEYS.ocrProvider).then((v) => {
+  ocrProvider.value = v === 'local' ? 'local' : 'qwen';
+});
+void getSetting(QWEN_SETTING_KEYS.localOcrScale).then((v) => {
+  const n = Number(v);
+  if (Number.isFinite(n) && n >= 1 && n <= 8) localOcrScale.value = n;
+});
 
 async function onStreamPreviewChange(value: boolean) {
   ocrShowStream.value = value;
   await setSetting(QWEN_SETTING_KEYS.streamPreview, value ? '1' : '0');
+}
+
+async function onOcrProviderChange(value: OcrProvider) {
+  ocrProvider.value = value;
+  await setSetting(QWEN_SETTING_KEYS.ocrProvider, value);
+}
+
+async function onLocalOcrScaleChange(value: number) {
+  const n = Math.min(8, Math.max(1, Number(value) || 5));
+  localOcrScale.value = n;
+  await setSetting(QWEN_SETTING_KEYS.localOcrScale, String(n));
 }
 
 async function attachOcrChunkListener() {
@@ -300,31 +325,124 @@ function clearTextSelection() {
   if (sel && sel.rangeCount) sel.removeAllRanges();
 }
 
+type MarkAction = 'hit-toggle' | 'present-toggle' | 'set' | 'clear';
+
+/** 左右键同时按下后，短时间内忽略 click / contextmenu，避免再切一次标记 */
+let suppressMarkUntil = 0;
+
+function armMarkGestureSuppress() {
+  suppressMarkUntil = performance.now() + 400;
+}
+
+function isMarkGestureSuppressed(): boolean {
+  return performance.now() < suppressMarkUntil;
+}
+
+function mutateMarkAt(
+  marksAt: DeduceGuess['marks'][0],
+  attr: 'char' | PronunciationAttr,
+  action: MarkAction,
+  mark?: 'hit' | 'present' | 'absent'
+) {
+  if (attr !== 'char') {
+    if (action === 'set' || action === 'clear' || isAutoPronunciationAttr(marksAt, attr)) {
+      setAutoPronunciationAttr(marksAt, attr, false);
+    }
+  }
+  if (action === 'clear') {
+    marksAt[attr] = null;
+  } else if (action === 'hit-toggle') {
+    const cur = marksAt[attr] as MarkState;
+    marksAt[attr] = cur === 'hit' ? 'absent' : 'hit';
+  } else if (action === 'present-toggle') {
+    marksAt[attr] = marksAt[attr] === 'present' ? 'absent' : 'present';
+  } else if (mark) {
+    marksAt[attr] = marksAt[attr] === mark ? null : mark;
+  }
+  if (attr === 'char') syncPronunciationMarksForChar(marksAt);
+}
+
+function syncDraftMarksFromGuess(idx: number) {
+  const g = deduceGuesses.value[idx];
+  if (!g || deduceDraft.value?.editIndex !== idx) return;
+  deduceDraft.value.marks = g.marks.map((m) => ({ ...m }));
+}
+
+function bothMouseButtons(event: MouseEvent): boolean {
+  return (event.buttons & 3) === 3;
+}
+
+function onDraftMarkPointerDown(
+  pos: number,
+  attr: 'char' | PronunciationAttr,
+  event: MouseEvent
+) {
+  onNodePointerDown(event);
+  if (!bothMouseButtons(event) || !deduceDraft.value?.marks[pos]) return;
+  event.preventDefault();
+  clearTextSelection();
+  armMarkGestureSuppress();
+  mutateMarkAt(deduceDraft.value.marks[pos], attr, 'clear');
+}
+
+function onHistoryMarkPointerDown(
+  idx: number,
+  pos: number,
+  attr: 'char' | PronunciationAttr,
+  event: MouseEvent
+) {
+  onNodePointerDown(event);
+  if (!bothMouseButtons(event)) return;
+  const marksAt = deduceGuesses.value[idx]?.marks[pos];
+  if (!marksAt) return;
+  event.preventDefault();
+  clearTextSelection();
+  armMarkGestureSuppress();
+  mutateMarkAt(marksAt, attr, 'clear');
+  syncDraftMarksFromGuess(idx);
+}
+
 function toggleNodeMark(pos: number, attr: 'char' | PronunciationAttr) {
   // 左键：对 ↔ 无
+  if (isMarkGestureSuppressed()) return;
   clearTextSelection();
-  if (!deduceDraft.value) return;
-  const marksAt = deduceDraft.value.marks[pos];
-  if (attr !== 'char' && isAutoPronunciationAttr(marksAt, attr)) {
-    setAutoPronunciationAttr(marksAt, attr, false);
-  }
-  const cur = marksAt[attr] as MarkState;
-  marksAt[attr] = cur === 'hit' ? 'absent' : 'hit';
-  if (attr === 'char') syncPronunciationMarksForChar(marksAt);
+  if (!deduceDraft.value?.marks[pos]) return;
+  mutateMarkAt(deduceDraft.value.marks[pos], attr, 'hit-toggle');
 }
 
 function presentNodeMark(pos: number, attr: 'char' | PronunciationAttr, event: MouseEvent) {
   // 右键：偏（已是偏则取消为无）
   event.preventDefault();
   event.stopPropagation();
+  if (isMarkGestureSuppressed()) return;
   clearTextSelection();
-  if (!deduceDraft.value) return;
-  const marksAt = deduceDraft.value.marks[pos];
-  if (attr !== 'char' && isAutoPronunciationAttr(marksAt, attr)) {
-    setAutoPronunciationAttr(marksAt, attr, false);
-  }
-  marksAt[attr] = marksAt[attr] === 'present' ? 'absent' : 'present';
-  if (attr === 'char') syncPronunciationMarksForChar(marksAt);
+  if (!deduceDraft.value?.marks[pos]) return;
+  mutateMarkAt(deduceDraft.value.marks[pos], attr, 'present-toggle');
+}
+
+function toggleHistoryMark(idx: number, pos: number, attr: 'char' | PronunciationAttr) {
+  if (isMarkGestureSuppressed()) return;
+  clearTextSelection();
+  const marksAt = deduceGuesses.value[idx]?.marks[pos];
+  if (!marksAt) return;
+  mutateMarkAt(marksAt, attr, 'hit-toggle');
+  syncDraftMarksFromGuess(idx);
+}
+
+function presentHistoryMark(
+  idx: number,
+  pos: number,
+  attr: 'char' | PronunciationAttr,
+  event: MouseEvent
+) {
+  event.preventDefault();
+  event.stopPropagation();
+  if (isMarkGestureSuppressed()) return;
+  clearTextSelection();
+  const marksAt = deduceGuesses.value[idx]?.marks[pos];
+  if (!marksAt) return;
+  mutateMarkAt(marksAt, attr, 'present-toggle');
+  syncDraftMarksFromGuess(idx);
 }
 
 function onNodePointerDown(event: MouseEvent) {
@@ -336,11 +454,8 @@ function onNodePointerDown(event: MouseEvent) {
 }
 
 function setMark(pos: number, attr: 'char' | PronunciationAttr, mark: 'hit' | 'present' | 'absent') {
-  if (!deduceDraft.value) return;
-  const marksAt = deduceDraft.value.marks[pos];
-  if (attr !== 'char') setAutoPronunciationAttr(marksAt, attr, false);
-  marksAt[attr] = marksAt[attr] === mark ? null : mark;
-  if (attr === 'char') syncPronunciationMarksForChar(marksAt);
+  if (!deduceDraft.value?.marks[pos]) return;
+  mutateMarkAt(deduceDraft.value.marks[pos], attr, 'set', mark);
 }
 
 function setTone(pos: number, toneVal: string) {
@@ -398,7 +513,7 @@ function editGuess(idx: number) {
   wordInput.value = g.word;
   showPinyinBar.value = true;
   pinyinInput.value = formatPinyinAsDigit(g.pinyin) || charsToDigitPinyin(g.chars);
-  setMsg('正在修改该条：可改读音/标记，确认后更新筛选', 'warn');
+  setMsg('正在修改该条：可改读音，确认后更新；标记也可在下方记录里直接改', 'warn');
 }
 
 function removeGuess(idx: number) {
@@ -542,6 +657,16 @@ function onOcrStart() {
 }
 
 async function onOcrImage(payload: { base64: string; mime: string; previewUrl: string }) {
+  if (ocrPreviewUrl.value) URL.revokeObjectURL(ocrPreviewUrl.value);
+  ocrPreviewUrl.value = payload.previewUrl;
+  setMsg('');
+  await nextTick();
+
+  if (ocrProvider.value === 'local') {
+    await runLocalOcr(payload.base64);
+    return;
+  }
+
   const cfg = qwenConfigRef.value?.getConfig() || qwenConfig.value;
   if (!cfg.apiKey) {
     ocrBusy.value = false;
@@ -562,10 +687,6 @@ async function onOcrImage(payload: { base64: string; mime: string; previewUrl: s
   ocrBusy.value = true;
   ocrStatusText.value = useStream ? '千问流式识别中…' : '千问识别中…';
   ocrStreamText.value = '';
-  if (ocrPreviewUrl.value) URL.revokeObjectURL(ocrPreviewUrl.value);
-  ocrPreviewUrl.value = payload.previewUrl;
-  setMsg('');
-  await nextTick();
 
   if (useStream) {
     await attachOcrChunkListener();
@@ -609,6 +730,47 @@ async function onOcrImage(payload: { base64: string; mime: string; previewUrl: s
     });
   } finally {
     await detachOcrChunkListener();
+    ocrBusy.value = false;
+    ocrStatusText.value = '';
+  }
+}
+
+async function runLocalOcr(imageB64: string) {
+  const scale = localOcrScale.value;
+  const modelTag = `local@scale=${scale}`;
+  ocrBusy.value = true;
+  ocrStatusText.value = `本地 OCR 识别中（${Math.round(scale * 100)}%）…`;
+  ocrStreamText.value = '';
+
+  try {
+    const result = await parseGuessBoardLocal({ imageB64, scale });
+    ocrWarnings.value = result.warnings || [];
+    ocrReviewRows.value = boardResultToReviewRows(result);
+    if (result.raw_response) {
+      ocrStreamText.value = result.raw_response;
+    }
+    await persistOcrResult({
+      model: modelTag,
+      ok: true,
+      result,
+      rawResponse: result.raw_response,
+    });
+    if (!result.guesses.length) {
+      setMsg('本地 OCR 未识别到猜测，可调整放大倍数或改用千问', 'warn');
+    } else {
+      setMsg(`本地识别到 ${result.guesses.length} 条猜测，请复核后确认`, 'ok');
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    setMsg(msg, 'err');
+    ocrReviewRows.value = null;
+    await persistOcrResult({
+      model: modelTag,
+      ok: false,
+      error: msg,
+      rawResponse: msg,
+    });
+  } finally {
     ocrBusy.value = false;
     ocrStatusText.value = '';
   }
@@ -695,15 +857,50 @@ defineExpose({ loadWord });
       读音在字下方输入框修改（如 <span class="example">jian4</span>），改完后可确认是否写入词库。
     </p>
     <p class="hint deduce-click-hint">
-      <strong>标记操作：</strong>左键在「对 / 无」之间切换；右键标「偏」（再右键取消为「无」）。绿=对 · 紫=偏 · 灰=无。
+      <strong>标记操作：</strong>左键「对 ↔ 无」；右键「偏」；左右键同时清除为未选择（非人选「无」）。绿=对 · 紫=偏 · 灰=无 · 米色=未选。
     </p>
 
-    <QwenConfig ref="qwenConfigRef" @change="onQwenConfigChange" />
+    <div class="ocr-provider-bar">
+      <label class="ocr-provider-label">识别引擎</label>
+      <div class="ocr-provider-options">
+        <label
+          v-for="opt in OCR_PROVIDER_OPTIONS"
+          :key="opt.value"
+          class="ocr-provider-option"
+          :class="{ active: ocrProvider === opt.value }"
+        >
+          <input
+            type="radio"
+            name="ocr-provider"
+            :value="opt.value"
+            :checked="ocrProvider === opt.value"
+            @change="onOcrProviderChange(opt.value)"
+          />
+          {{ opt.label }}
+        </label>
+      </div>
+      <div v-if="ocrProvider === 'local'" class="ocr-scale-row">
+        <label for="local-ocr-scale">放大 {{ Math.round(localOcrScale * 100) }}%</label>
+        <input
+          id="local-ocr-scale"
+          type="range"
+          min="1"
+          max="8"
+          step="0.5"
+          :value="localOcrScale"
+          @input="onLocalOcrScaleChange(Number(($event.target as HTMLInputElement).value))"
+        />
+      </div>
+    </div>
+
+    <QwenConfig v-show="ocrProvider === 'qwen'" ref="qwenConfigRef" @change="onQwenConfigChange" />
 
     <ImageIntake
       :busy="ocrBusy"
       :status-text="ocrStatusText"
-      :show-stream-preview="ocrShowStream"
+      :show-stream-preview="ocrProvider === 'qwen' && ocrShowStream"
+      :allow-stream-preview="ocrProvider === 'qwen'"
+      :engine-label="ocrProvider === 'local' ? '本地 OCR' : '千问识别'"
       :stream-text="ocrStreamText"
       @update:show-stream-preview="onStreamPreviewChange"
       @start="onOcrStart"
@@ -752,15 +949,15 @@ defineExpose({ loadWord });
           显示详细面板
         </label>
       </div>
-      <p class="hint deduce-click-hint compact">左键：对 ↔ 无 · 右键：偏</p>
+      <p class="hint deduce-click-hint compact">左键：对 ↔ 无 · 右键：偏 · 左右同时：清除</p>
       <div class="deduce-py-row preview-row">
         <div v-for="(ch, pos) in deduceDraft.chars" :key="pos" class="deduce-syl">
           <button
             type="button"
             class="deduce-node char-node"
             :class="attrMarkClass(deduceDraft.marks[pos], 'char')"
-            title="左键：对/无 · 右键：偏"
-            @mousedown="onNodePointerDown"
+            title="左键：对/无 · 右键：偏 · 左右同时：清除"
+            @mousedown="onDraftMarkPointerDown(pos, 'char', $event)"
             @click="toggleNodeMark(pos, 'char')"
             @contextmenu="presentNodeMark(pos, 'char', $event)"
           >
@@ -781,8 +978,8 @@ defineExpose({ loadWord });
               type="button"
               class="deduce-node"
               :class="attrMarkClass(deduceDraft.marks[pos], 'sm')"
-              title="左键：对/无 · 右键：偏"
-              @mousedown="onNodePointerDown"
+              title="左键：对/无 · 右键：偏 · 左右同时：清除"
+              @mousedown="onDraftMarkPointerDown(pos, 'sm', $event)"
               @click="toggleNodeMark(pos, 'sm')"
               @contextmenu="presentNodeMark(pos, 'sm', $event)"
             >
@@ -792,8 +989,8 @@ defineExpose({ loadWord });
               type="button"
               class="deduce-node"
               :class="attrMarkClass(deduceDraft.marks[pos], 'ym')"
-              title="左键：对/无 · 右键：偏"
-              @mousedown="onNodePointerDown"
+              title="左键：对/无 · 右键：偏 · 左右同时：清除"
+              @mousedown="onDraftMarkPointerDown(pos, 'ym', $event)"
               @click="toggleNodeMark(pos, 'ym')"
               @contextmenu="presentNodeMark(pos, 'ym', $event)"
             >
@@ -803,8 +1000,8 @@ defineExpose({ loadWord });
               type="button"
               class="deduce-node"
               :class="attrMarkClass(deduceDraft.marks[pos], 'tone')"
-              title="左键：对/无 · 右键：偏"
-              @mousedown="onNodePointerDown"
+              title="左键：对/无 · 右键：偏 · 左右同时：清除"
+              @mousedown="onDraftMarkPointerDown(pos, 'tone', $event)"
               @click="toggleNodeMark(pos, 'tone')"
               @contextmenu="presentNodeMark(pos, 'tone', $event)"
             >
@@ -905,21 +1102,63 @@ defineExpose({ loadWord });
 
     <div v-if="deduceGuesses.length" class="deduce-history">
       <h3>已记录猜测</h3>
+      <p class="hint deduce-click-hint compact">可直接改标记：左键对 ↔ 无 · 右键偏 · 左右同时清除</p>
       <div v-for="(g, idx) in deduceGuesses" :key="g.word + idx" class="deduce-history-item">
         <div class="deduce-card-head">
           <div class="deduce-word-title">{{ g.word }}</div>
           <div class="deduce-card-actions">
-            <button type="button" class="ghost small" @click="editGuess(idx)">改标记</button>
+            <button type="button" class="ghost small" @click="editGuess(idx)">改读音</button>
             <button type="button" class="ghost small" @click="removeGuess(idx)">删除</button>
           </div>
         </div>
         <div class="deduce-py-row">
           <div v-for="(ch, pos) in g.chars" :key="pos" class="deduce-syl">
-            <span class="deduce-node char-node" :class="attrMarkClass(g.marks[pos], 'char')">{{ ch.c }}</span>
+            <button
+              type="button"
+              class="deduce-node char-node"
+              :class="attrMarkClass(g.marks[pos], 'char')"
+              title="左键：对/无 · 右键：偏 · 左右同时：清除"
+              @mousedown="onHistoryMarkPointerDown(idx, pos, 'char', $event)"
+              @click="toggleHistoryMark(idx, pos, 'char')"
+              @contextmenu="presentHistoryMark(idx, pos, 'char', $event)"
+            >
+              {{ ch.c }}
+            </button>
             <div class="deduce-py-nodes">
-              <span v-if="ch.sm" class="deduce-node" :class="attrMarkClass(g.marks[pos], 'sm')">{{ ch.sm }}</span>
-              <span class="deduce-node" :class="attrMarkClass(g.marks[pos], 'ym')">{{ ch.ym || ch.py }}</span>
-              <span class="deduce-node" :class="attrMarkClass(g.marks[pos], 'tone')">{{ toneDigit(ch.tone) }}</span>
+              <button
+                v-if="ch.sm"
+                type="button"
+                class="deduce-node"
+                :class="attrMarkClass(g.marks[pos], 'sm')"
+                title="左键：对/无 · 右键：偏 · 左右同时：清除"
+                @mousedown="onHistoryMarkPointerDown(idx, pos, 'sm', $event)"
+                @click="toggleHistoryMark(idx, pos, 'sm')"
+                @contextmenu="presentHistoryMark(idx, pos, 'sm', $event)"
+              >
+                {{ ch.sm }}
+              </button>
+              <button
+                type="button"
+                class="deduce-node"
+                :class="attrMarkClass(g.marks[pos], 'ym')"
+                title="左键：对/无 · 右键：偏 · 左右同时：清除"
+                @mousedown="onHistoryMarkPointerDown(idx, pos, 'ym', $event)"
+                @click="toggleHistoryMark(idx, pos, 'ym')"
+                @contextmenu="presentHistoryMark(idx, pos, 'ym', $event)"
+              >
+                {{ ch.ym || ch.py }}
+              </button>
+              <button
+                type="button"
+                class="deduce-node"
+                :class="attrMarkClass(g.marks[pos], 'tone')"
+                title="左键：对/无 · 右键：偏 · 左右同时：清除"
+                @mousedown="onHistoryMarkPointerDown(idx, pos, 'tone', $event)"
+                @click="toggleHistoryMark(idx, pos, 'tone')"
+                @contextmenu="presentHistoryMark(idx, pos, 'tone', $event)"
+              >
+                {{ toneDigit(ch.tone) }}
+              </button>
             </div>
           </div>
         </div>

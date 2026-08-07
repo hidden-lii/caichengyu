@@ -4,14 +4,17 @@ import { open } from '@tauri-apps/api/dialog';
 import { readTextFile } from '@tauri-apps/api/fs';
 import {
   addIdiom,
+  applyBuiltinLexicon,
   getSetting,
   importLexiconFromUrl,
+  listBuiltinLexicons,
   setSetting,
   updateIdiomPinyin,
   upsertIdioms,
 } from '../api/idiom';
+import type { BuiltinLexiconInfo } from '../entity/idiom';
 import { useLexicon } from '../composables/useLexicon';
-import { normalizeCorpus } from '../engine/pinyin';
+import { normalizeCorpus, parseLexiconText } from '../engine/pinyin';
 
 const { reload: reloadLexicon } = useLexicon();
 
@@ -25,6 +28,11 @@ function yieldToUi(): Promise<void> {
 
 const DEFAULT_URL =
   'https://raw.githubusercontent.com/pwxcoo/chinese-xinhua/master/data/idiom.json';
+
+const builtinSources = ref<BuiltinLexiconInfo[]>([]);
+const selectedSource = ref('xinhua');
+const sourceMsg = ref('');
+const sourceMsgClass = ref('');
 
 const urlInput = ref(DEFAULT_URL);
 const urlMsg = ref('');
@@ -46,11 +54,31 @@ const multiMsgClass = ref('');
 const busy = ref(false);
 const busyText = ref('');
 
+async function loadSourceState() {
+  try {
+    builtinSources.value = await listBuiltinLexicons();
+  } catch {
+    builtinSources.value = [
+      { id: 'xinhua', name: '新华成语', description: '内置新华成语词库（默认）' },
+      { id: 'hwxnet', name: '汉文学网成语', description: '汉文学网成语，仅含四字' },
+    ];
+  }
+  const saved = await getSetting('lexicon_source');
+  if (saved === 'xinhua' || saved === 'hwxnet') {
+    selectedSource.value = saved;
+  } else if (!saved) {
+    selectedSource.value = 'xinhua';
+  } else {
+    selectedSource.value = saved;
+  }
+}
+
 async function loadSavedUrl() {
   const saved = await getSetting('lexicon_url');
   if (saved) urlInput.value = saved;
 }
 
+loadSourceState();
 loadSavedUrl();
 
 function formatResult(prefix: string, result: { added: number; updated: number; skipped: number; errors: string[] }) {
@@ -77,6 +105,29 @@ async function withBusy(text: string, fn: () => Promise<boolean>): Promise<void>
   }
 }
 
+async function applySelectedSource() {
+  sourceMsg.value = '';
+  sourceMsgClass.value = '';
+  const id = selectedSource.value;
+  if (id !== 'xinhua' && id !== 'hwxnet') {
+    sourceMsg.value = '请选择内置词库后再应用';
+    sourceMsgClass.value = 'err';
+    return;
+  }
+  await withBusy('正在切换内置词库…', async () => {
+    try {
+      const result = await applyBuiltinLexicon(id);
+      sourceMsg.value = formatResult(`已切换为「${builtinSources.value.find((s) => s.id === id)?.name || id}」`, result);
+      sourceMsgClass.value = 'ok';
+      return true;
+    } catch (e) {
+      sourceMsg.value = '切换失败：' + (e instanceof Error ? e.message : String(e));
+      sourceMsgClass.value = 'err';
+      return false;
+    }
+  });
+}
+
 async function reloadFromUrl() {
   urlMsg.value = '';
   urlMsgClass.value = '';
@@ -90,6 +141,7 @@ async function reloadFromUrl() {
     try {
       const result = await importLexiconFromUrl(url);
       await setSetting('lexicon_url', url);
+      selectedSource.value = 'custom';
       urlMsg.value = formatResult(`已从网络加载`, result);
       urlMsgClass.value = 'ok';
       return true;
@@ -106,15 +158,16 @@ async function uploadFile() {
   try {
     const selected = await open({
       multiple: false,
-      filters: [{ name: 'JSON', extensions: ['json', 'txt'] }],
+      filters: [{ name: 'JSON / JSONL', extensions: ['json', 'jsonl', 'txt'] }],
     });
     if (!selected || Array.isArray(selected)) return;
     await withBusy('正在导入词库文件…', async () => {
       try {
         const text = await readTextFile(selected);
-        const data = JSON.parse(text);
-        const items = normalizeCorpus(data);
+        const items = parseLexiconText(text);
         const result = await upsertIdioms(items);
+        await setSetting('lexicon_source', 'custom');
+        selectedSource.value = 'custom';
         uploadMsg.value = formatResult('上传完成', result);
         uploadMsgClass.value = 'ok';
         return true;
@@ -190,7 +243,7 @@ async function addMulti() {
 
 <template>
   <section class="panel lexicon-panel">
-    <p class="hint">词库保存在本地 SQLite。首次启动会自动导入内置词库。</p>
+    <p class="hint">词库保存在本地 SQLite。首次启动会自动导入内置新华成语词库。可在下方切换内置数据源。</p>
 
     <div v-if="busy" class="lexicon-busy-overlay" role="status" aria-live="polite">
       <div class="lexicon-busy-card">
@@ -202,7 +255,44 @@ async function addMulti() {
       </div>
     </div>
 
-    <h3>词库来源</h3>
+    <h3>内置词库</h3>
+    <p class="hint">切换会整库替换当前本地词库。汉文学网词库仅含四字成语。</p>
+    <div class="lexicon-source-list" role="radiogroup" aria-label="内置词库">
+      <label
+        v-for="src in builtinSources"
+        :key="src.id"
+        class="lexicon-source-option"
+        :class="{ active: selectedSource === src.id }"
+      >
+        <input
+          v-model="selectedSource"
+          type="radio"
+          name="lexicon-source"
+          :value="src.id"
+          :disabled="busy"
+        />
+        <span class="lexicon-source-text">
+          <strong>{{ src.name }}</strong>
+          <span>{{ src.description }}</span>
+        </span>
+      </label>
+      <label
+        v-if="selectedSource === 'custom'"
+        class="lexicon-source-option active"
+      >
+        <input type="radio" name="lexicon-source" value="custom" checked disabled />
+        <span class="lexicon-source-text">
+          <strong>自定义</strong>
+          <span>当前词库来自网络或本地文件导入</span>
+        </span>
+      </label>
+    </div>
+    <button type="button" :disabled="busy || (selectedSource !== 'xinhua' && selectedSource !== 'hwxnet')" @click="applySelectedSource">
+      应用此词库
+    </button>
+    <div v-if="sourceMsg" class="msg" :class="sourceMsgClass">{{ sourceMsg }}</div>
+
+    <h3>网络词库</h3>
     <label>词库 JSON 地址</label>
     <div class="row">
       <input v-model="urlInput" type="url" spellcheck="false" :disabled="busy" />
@@ -211,7 +301,8 @@ async function addMulti() {
     <div v-if="urlMsg" class="msg" :class="urlMsgClass">{{ urlMsg }}</div>
 
     <h3>上传词库</h3>
-    <button type="button" class="secondary" :disabled="busy" @click="uploadFile">选择 JSON 文件</button>
+    <p class="hint">支持 JSON 数组；JSONL 导入时自动排除非四字成语。</p>
+    <button type="button" class="secondary" :disabled="busy" @click="uploadFile">选择 JSON / JSONL 文件</button>
     <div v-if="uploadMsg" class="msg" :class="uploadMsgClass">{{ uploadMsg }}</div>
 
     <h3>单条添加</h3>

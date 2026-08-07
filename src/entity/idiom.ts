@@ -58,3 +58,9 @@ export interface UpsertResult {
   skipped: number;
   errors: string[];
 }
+
+export interface BuiltinLexiconInfo {
+  id: string;
+  name: string;
+  description: string;
+}

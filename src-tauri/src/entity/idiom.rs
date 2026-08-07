@@ -40,3 +40,10 @@ pub struct UpsertResult {
     pub skipped: usize,
     pub errors: Vec<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuiltinLexiconInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}

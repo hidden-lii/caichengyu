@@ -20,6 +20,10 @@ const props = defineProps<{
   showStreamPreview?: boolean;
   /** 当前累计的流式文本 */
   streamText?: string;
+  /** 是否显示流式预览开关（本地 OCR 关闭） */
+  allowStreamPreview?: boolean;
+  /** 标题引擎名 */
+  engineLabel?: string;
 }>();
 
 const dragOver = ref(false);
@@ -262,11 +266,11 @@ onUnmounted(() => {
       class="image-intake-input"
       @change="onFileChange"
     />
-    <p class="image-intake-title">从截图导入猜测（千问识别）</p>
+    <p class="image-intake-title">从截图导入猜测（{{ engineLabel || '识别' }}）</p>
     <p class="image-intake-hint">
       拖入 / 粘贴图片后点「开始识别」，或<button type="button" class="linkish" @click="onPickClick">选择本地文件</button>
     </p>
-    <label class="image-intake-stream-opt">
+    <label v-if="allowStreamPreview !== false" class="image-intake-stream-opt">
       <input
         type="checkbox"
         :checked="showStreamPreview"
